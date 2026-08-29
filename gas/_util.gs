@@ -1,0 +1,150 @@
+// ============================================================
+// gas_takamura ／ 共通ユーティリティ
+// ============================================================
+
+// 実行中だけ有効なSS上書き（SETUP直後・onFormSubmit時に e.source を使うため）
+var TK_SS_OVERRIDE = null;
+
+function tkSS_() {
+  if (TK_SS_OVERRIDE) return TK_SS_OVERRIDE;
+  if (TK.SS_ID) return SpreadsheetApp.openById(TK.SS_ID);
+  // SS_ID未設定時は、このスクリプトにバインドされたSSを使う（コンテナバインド運用も可）
+  var act = SpreadsheetApp.getActiveSpreadsheet();
+  if (act) return act;
+  throw new Error('TK.SS_ID が未設定です。config.gs に「SUN日報解析」SSのIDを入れてください。');
+}
+
+// シート取得（無ければヘッダ付きで作成）
+function tkEnsureSheet_(name, header) {
+  var ss = tkSS_();
+  var sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    if (header && header.length) {
+      sh.getRange(1, 1, 1, header.length).setValues([header]);
+      sh.setFrozenRows(1);
+      sh.getRange(1, 1, 1, header.length).setFontWeight('bold').setBackground('#1B5E20').setFontColor('#FFFFFF');
+    }
+  }
+  return sh;
+}
+
+function tkEsc_(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// メンバーID＝メールアドレス（小文字）を安定キーとして使う
+function tkMemberId_(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+// 管理者メール（config優先／無ければデプロイ実行者）
+function tkAdminEmail_() {
+  if (TK.ADMIN_EMAIL) return TK.ADMIN_EMAIL;
+  try { return Session.getEffectiveUser().getEmail(); } catch (e) { return ''; }
+}
+
+// 今週（月〜日）の範囲。refDate省略時は今日基準。
+function tkWeekRange_(refDate) {
+  var base = refDate ? new Date(refDate) : new Date();
+  var day = base.getDay();                 // 0=日
+  var diffToMon = (day === 0 ? -6 : 1 - day);
+  var start = new Date(base); start.setDate(base.getDate() + diffToMon); start.setHours(0, 0, 0, 0);
+  var end = new Date(start); end.setDate(start.getDate() + 6); end.setHours(23, 59, 59, 999);
+  var label = Utilities.formatDate(start, TK.TZ, 'M/d') + '〜' + Utilities.formatDate(end, TK.TZ, 'M/d');
+  return { start: start, end: end, label: label };
+}
+
+// 先頭が = + - @ だとSheetsが数式と誤認するので ' でエスケープ
+function tkSafeCell_(s) {
+  s = String(s == null ? '' : s);
+  return /^[=+\-@]/.test(s) ? ("'" + s) : s;
+}
+
+// 実行ログ追記
+function tkLog_(tag, msg) {
+  try {
+    var sh = tkEnsureSheet_(TK.SHEET_LOG, ['日時', '種別', '内容']);
+    sh.appendRow([new Date(), tkSafeCell_(tag), tkSafeCell_(String(msg).slice(0, 4000))]);
+  } catch (e) { Logger.log(tag + ': ' + msg); }
+}
+
+// 回答シート（フォームのリンク先）を名前ゆらぎに強く取得
+//  「回答」/「Form Responses」/「Form_Responses」/「フォームの回答 1」等に対応
+function tkRawSheet_() {
+  var ss = tkSS_();
+  var sh = ss.getSheetByName(TK.SHEET_RAW);
+  if (sh) return sh;
+  var sheets = ss.getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    try { if (sheets[i].getFormUrl && sheets[i].getFormUrl()) return sheets[i]; } catch (e) {}
+  }
+  for (var j = 0; j < sheets.length; j++) {
+    if (/回答|フォーム|Form[ _]?Responses/i.test(sheets[j].getName())) return sheets[j];
+  }
+  return null;
+}
+
+// ---------- Gemini（gas_nippo と同じ方式・JSON強制） ----------
+function tkGeminiJson_(prompt, schema) {
+  var keys = String(SECRET_CONFIG.GEMINI_API_KEYS).split(',')
+    .map(function (s) { return s.trim(); }).filter(String);
+  if (!keys.length) return { ok: false, error: 'Gemini APIキー未設定' };
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+    SECRET_CONFIG.GEMINI_MODEL + ':generateContent';
+  var payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.1 }
+  };
+  var lastErr = '';
+  for (var i = 0; i < keys.length; i++) {
+    try {
+      var res = UrlFetchApp.fetch(url + '?key=' + encodeURIComponent(keys[i]), {
+        method: 'post', contentType: 'application/json',
+        payload: JSON.stringify(payload), muteHttpExceptions: true
+      });
+      var code = res.getResponseCode();
+      if (code === 429 || code >= 500) { lastErr = 'HTTP ' + code; continue; }
+      var body = JSON.parse(res.getContentText());
+      if (code !== 200) { lastErr = (body.error && body.error.message) || ('HTTP ' + code); continue; }
+      var textOut = body.candidates && body.candidates[0] && body.candidates[0].content &&
+        body.candidates[0].content.parts && body.candidates[0].content.parts[0] &&
+        body.candidates[0].content.parts[0].text;
+      if (!textOut) { lastErr = 'empty response'; continue; }
+      return { ok: true, data: JSON.parse(textOut) };
+    } catch (e) { lastErr = String(e && e.message || e); }
+  }
+  return { ok: false, error: lastErr || 'gemini failed' };
+}
+
+// Gemini（自由文・JSONなし）。応援文/レポート生成用。
+function tkGeminiText_(prompt, opt) {
+  opt = opt || {};
+  var keys = String(SECRET_CONFIG.GEMINI_API_KEYS).split(',')
+    .map(function (s) { return s.trim(); }).filter(String);
+  if (!keys.length) return '';
+  var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+    SECRET_CONFIG.GEMINI_MODEL + ':generateContent';
+  var payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { temperature: opt.temperature || 0.7, maxOutputTokens: opt.maxTokens || 2048 }
+  };
+  for (var i = 0; i < keys.length; i++) {
+    try {
+      var res = UrlFetchApp.fetch(url + '?key=' + encodeURIComponent(keys[i]), {
+        method: 'post', contentType: 'application/json',
+        payload: JSON.stringify(payload), muteHttpExceptions: true
+      });
+      var code = res.getResponseCode();
+      if (code === 429 || code >= 500) continue;
+      var body = JSON.parse(res.getContentText());
+      if (code !== 200) continue;
+      var t = body.candidates && body.candidates[0] && body.candidates[0].content &&
+        body.candidates[0].content.parts && body.candidates[0].content.parts[0] &&
+        body.candidates[0].content.parts[0].text;
+      if (t) return String(t).trim();
+    } catch (e) {}
+  }
+  return '';
+}
