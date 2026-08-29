@@ -1,0 +1,11 @@
+config.gs
+.clasp.json
+*.mp4
+*.mp3
+*.wav
+画像_BQ版/
+_img_opt/
+__pycache__/
+*.pyc
+.htpasswd
+.DS_Store
