@@ -1,0 +1,10 @@
+{
+  "//": "このファイルを .clasp.json にコピーし、scriptId を実物に差し替えてから clasp push する。.clasp.json 自体は .gitignore 済み。",
+  "scriptId": "＜Apps ScriptプロジェクトのIDをここに＞",
+  "rootDir": "",
+  "scriptExtensions": [".js", ".gs"],
+  "htmlExtensions": [".html"],
+  "jsonExtensions": [".json"],
+  "filePushOrder": [],
+  "skipSubdirectories": false
+}

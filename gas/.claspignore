@@ -1,0 +1,26 @@
+# clasp push で送るファイルの指定。
+# 全部を除外してから、送るものだけを ! で戻す方式。
+#
+# ⚠ MCQ113_一括貼付用.gs は絶対に入れない。
+#    個別ファイルと同時に送ると、全関数が二重に定義される。
+#
+# ⚠ 新しい .gs を足したら、この一覧にも足すこと。
+#    2026-07 版はここに 15_ingest / 70_gc / 80_bulk / 90_gcslide / 95_philosophy が
+#    無く、そのまま使うと8月分の機能が丸ごと抜ける。
+**/*
+!config.gs
+!_util.gs
+!criteria.gs
+!10_classify.gs
+!15_ingest.gs
+!20_katsudo.gs
+!30_okr.gs
+!40_ouen.gs
+!50_report.gs
+!60_setup.gs
+!70_gc.gs
+!80_bulk.gs
+!90_gcslide.gs
+!95_philosophy.gs
+!コード.gs
+!appsscript.json
