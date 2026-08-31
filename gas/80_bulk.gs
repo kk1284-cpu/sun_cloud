@@ -57,7 +57,9 @@ function tkキャッチアップ_設定() {
 
 function tk日次キャッチアップ() {
   var saveMax = TK_BULK.MAX_BATCHES, savePace = TK_BULK.PACE_MS;
-  TK_BULK.MAX_BATCHES = 2;      // 1回の実行でAPIは最大2回（無料枠を食いつぶさない）
+  TK_BULK.MAX_BATCHES = 8;      // 1回の実行でAPIは最大8回＝120件/時
+                                //   2026-08-31 有料枠に切り替えたので 2 から上げた。
+                                //   無料枠(5回/分)に戻す場合は 2 に戻す。
   TK_BULK.PACE_MS = 3000;
   try {
     var r = tkBulkRun_();
@@ -68,6 +70,38 @@ function tk日次キャッチアップ() {
   } finally {
     TK_BULK.MAX_BATCHES = saveMax; TK_BULK.PACE_MS = savePace;
   }
+}
+
+// ============================================================
+//  期間を絞って判定する（今週分を先に押さえるため）
+// ============================================================
+//  ⚠ tkBulkRun_ は「古い順」に回す。過去1年分(2458件)が入っている状態で
+//     素直に流すと、今週の日報がいちばん最後になり、金曜のGC下書きが空になる。
+//     そこで SINCE を一時的に効かせて、その日以降だけを先に判定する。
+//     終わったら SINCE は元に戻すので、あとから過去分を流せる。
+function tk分類_期間を絞って(since, maxBatches) {
+  var saveSince = TK_BULK.SINCE, saveMax = TK_BULK.MAX_BATCHES;
+  TK_BULK.SINCE = since;
+  TK_BULK.MAX_BATCHES = maxBatches || 0;   // 0=無制限（6分の実行上限まで回す）
+  var r;
+  try {
+    r = tkBulkRun_();
+  } finally {
+    TK_BULK.SINCE = saveSince; TK_BULK.MAX_BATCHES = saveMax;
+  }
+  var msg = '期間を絞って判定（' + since + ' 以降）: 今回 ' + r.processed + '件'
+          + ' / この期間の残り ' + r.remaining + '件';
+  if (r.remaining > 0) msg += '\nもう一度実行すると続きを判定します。';
+  else msg += '\nこの期間は完了しました。';
+  tkLog_('期間指定分類', msg);
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
+  return r;
+}
+
+// トライアル開始日(9/1)以降だけを判定する。金曜のGC下書きに間に合わせるため
+function tk分類_今週分を先に() {
+  return tk分類_期間を絞って('2026-09-01', 0);
 }
 
 // ============================================================
