@@ -9,3 +9,7 @@ __pycache__/
 *.pyc
 .htpasswd
 .DS_Store
+
+# 名簿（実名＋個人メール）はリポジトリに置かない（契約第7条）
+gas/members_*.tsv
+gas/_members_source.tsv
