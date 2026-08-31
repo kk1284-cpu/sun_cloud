@@ -219,7 +219,13 @@ function tkGCSBuild_(offsetWeeks) {
     var pres = SlidesApp.openById(copy.getId());
 
     var d = tkGCDraftText_(p, range);            // 70_gc.gs のAI下書きをそのまま使う
-    var b = function (k) { return p.buckets[k] && p.buckets[k].length ? p.buckets[k].join('\n') : '（今週は該当なし）'; };
+    // 箱に収まる分だけ。3件を超えたら件数で示す
+    var b = function (k) {
+      var v = p.buckets[k] || [];
+      if (!v.length) return '（今週は該当なし）';
+      var head = v.slice(0, 3).map(function (x) { return '・' + x; }).join('\n');
+      return v.length > 3 ? head + '\n・ほか' + (v.length - 3) + '件' : head;
+    };
 
     var map = {
       '{{NAME}}':          p.name || mid,
@@ -285,7 +291,11 @@ function tkGCSCollect_(range) {
     var gc = gcByCode[a.code] || (a.axis === '成果' ? '直接の成果'
       : a.axis === '姿勢' ? '価値への取り組み' : '人材育成');
     if (!p.buckets[gc]) p.buckets[gc] = [];
-    p.buckets[gc].push('・' + (a.title || '') + '：' + String(a.practice || '').slice(0, 120));
+    // ⚠ ここに日報の生文を入れると箱からあふれる（2026-08-31 実物で確認）。
+    //    220x106pt の箱に3分類ぶん入るので、小見出しだけにして重複も除く。
+    //    詳しい中身は日報そのものを見ればよい。
+    var ti = String(a.title || '').trim();
+    if (ti && p.buckets[gc].indexOf(ti) < 0) p.buckets[gc].push(ti);
   });
   return per;
 }
@@ -498,7 +508,7 @@ function tkGCSAutoToken_(apply) {
         '（' + one[0].dir + Math.round(one[0].d) + 'pt ' + one[0].b.sh.getObjectId() +
         ' 位置 ' + Math.round(one[0].b.box.l) + ',' + Math.round(one[0].b.box.t) + '）');
       lines.push('　　' + d.text.replace(/\n/g, ' ／ '));
-      if (apply) { one[0].b.sh.getText().setText(d.text); pasted += 3; }
+      if (apply) { one[0].b.sh.getText().setText(d.text); tkGCSFit_(one[0].b.sh); pasted += 3; }
       return;
     }
 
@@ -522,7 +532,7 @@ function tkGCSAutoToken_(apply) {
       lines.push('　' + toks[i] + '  ←  ' + d.label +
         '（' + p.dir + Math.round(p.d) + 'pt ' + p.b.sh.getObjectId() +
         ' 位置 ' + Math.round(p.b.box.l) + ',' + Math.round(p.b.box.t) + '）');
-      if (apply) { p.b.sh.getText().setText(toks[i]); pasted++; }
+      if (apply) { p.b.sh.getText().setText(toks[i]); tkGCSFit_(p.b.sh); pasted++; }
     });
   });
 
@@ -537,6 +547,7 @@ function tkGCSAutoToken_(apply) {
     lines.push('', '見出し行はすでにあります（作り直しません）');
   } else if (apply) {
     var tb = sl.insertTextBox(HEAD, 12, 6, 420, 22);
+    tkGCSFit_(tb);
     try { tb.getText().getTextStyle().setFontSize(11).setBold(true); } catch (e) {}
     lines.push('', '見出し行を左上に作りました: ' + HEAD);
     pasted += 4;
@@ -585,3 +596,93 @@ function tkGCスライド_目印を下見() { return tkGCSAutoToken_(false); }
 
 // 実際に貼る
 function tkGCスライド_目印を貼る() { return tkGCSAutoToken_(true); }
+
+// ============================================================
+//  文字が箱からあふれないように整える
+// ============================================================
+//  ⚠ 2026-08-31 の初回生成で、文字が箱を突き抜けて重なり読めなくなった。
+//     原因は2つ。
+//      ① 成果の欄に日報の生文を120字×件数ぶん入れていた（下の tkGCSCollect_ で修正）
+//      ② スライドの文字が既定で縮まない設定だった（この関数で修正）
+//
+//  テンプレの目印（{{...}}）が入っている箱に、
+//    ・小さめの文字
+//    ・はみ出したら自動で縮む設定
+//  を入れておく。差し替え後の文字にもこの設定が引き継がれる。
+
+var TK_GCS_FONT = 8;      // 目印の箱の文字の大きさ（pt）
+
+// 1つの箱に、小さめの文字とはみ出し時の自動縮小を入れる
+function tkGCSFit_(sh) {
+  try { sh.getText().getTextStyle().setFontSize(TK_GCS_FONT); } catch (e) {}
+  try { sh.getAutofit().setAutofitType(SlidesApp.AutofitType.SHRINK_ON_OVERFLOW); } catch (e) {}
+}
+
+function tkGCスライド_文字を整える() {
+  var c = TK.GC_SLIDE;
+  if (!c || !c.TEMPLATE_ID) throw new Error('TK.GC_SLIDE.TEMPLATE_ID が未設定です');
+  if (c.TEMPLATE_ID === c.MASTER_ID) throw new Error('TEMPLATE_ID が MASTER_ID と同じです');
+
+  var pres = SlidesApp.openById(c.TEMPLATE_ID);
+  var n = 0, lines = ['=== 目印の箱の文字を整える ==='];
+
+  pres.getSlides().forEach(function (sl) {
+    sl.getShapes().forEach(function (sh) {
+      var t = '';
+      try { t = String(sh.getText().asString() || ''); } catch (e) { return; }
+      if (t.indexOf('{{') < 0) return;
+      try { sh.getText().getTextStyle().setFontSize(TK_GCS_FONT); } catch (e) {}
+      try { sh.getAutofit().setAutofitType(SlidesApp.AutofitType.SHRINK_ON_OVERFLOW); } catch (e) {}
+      n++;
+      lines.push('　' + sh.getObjectId() + '  ' + t.replace(/\s+/g, ' ').slice(0, 40));
+    });
+  });
+  pres.saveAndClose();
+
+  lines.push('');
+  lines.push('整えた箱: ' + n + '個（文字' + TK_GCS_FONT + 'pt・はみ出したら自動で縮む）');
+  var msg = lines.join('\n');
+  tkLog_('GCスライド', '文字を整えた ' + n + '個');
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert(msg.slice(0, 1400)); } catch (e) {}
+  return msg;
+}
+
+// ============================================================
+//  作り直しのために、ある週の下書きを消す
+// ============================================================
+//  ⚠ 消すのは個人フォルダの中の「GCシート <週> <氏名>」だけ。
+//     ご本人が手を入れたものも消えるので、作り直す前だけに使う。
+//
+//    tkGCスライド_先週分を消す()  … 直前の週のぶんを消す
+function tkGCスライド_先週分を消す() { return tkGCSDelete_(-1); }
+function tkGCスライド_今週分を消す() { return tkGCSDelete_(0); }
+
+function tkGCSDelete_(offsetWeeks) {
+  var range = tkGCWeekRange_(offsetWeeks);
+  var label = tkGCWeekLabel_(range);
+  var work = tkGCSWorkFolder_();
+  var pat = 'GCシート ' + label.replace(/\//g, '-');
+  var n = 0, lines = ['=== 下書きを消す（' + label + '） ==='];
+
+  var folders = work.getFolders();
+  while (folders.hasNext()) {
+    var f = folders.next();
+    var files = f.getFiles();
+    while (files.hasNext()) {
+      var file = files.next();
+      if (file.getName().indexOf(pat) === 0) {
+        lines.push('　消す: ' + file.getName());
+        file.setTrashed(true);
+        n++;
+      }
+    }
+  }
+  lines.push('');
+  lines.push('消した下書き: ' + n + '件（ゴミ箱に入りました。元に戻せます）');
+  var msg = lines.join('\n');
+  tkLog_('GCスライド', '下書き削除 ' + n + '件（' + label + '）');
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert(msg.slice(0, 1400)); } catch (e) {}
+  return { deleted: n };
+}
