@@ -355,8 +355,13 @@ var TK_GCS_MIN_W = 60, TK_GCS_MIN_H = 25;
 //    （後ろに置くと、隣のフィロソフィが3欄の1つ目を取ってしまう）
 var TK_GCS_LABELS = [
   // ── 複数欄のものを先に
+  //  ⚠ 週次シートの「外に生み出した成果」は**回答欄が1つ**。
+  //     見出しの文字に「直接の成果／価値への取り組み／人材育成」と3つ書いてあるだけで、
+  //     欄は分かれていない（3欄に分かれているのは3ヶ月シートのほう）。
+  //     実測: 見出し 428,22 (220x109) / 空欄 428,28 (220x106) ＝ 1対1。
+  //     なので1つの欄に、小見出しを付けて3つまとめて入れる。
   { label: '外に生み出した成果は何か直接の成果価値への取り組み人材育成',
-    tokens: ['{{RESULT_DIRECT}}', '{{RESULT_VALUE}}', '{{RESULT_PEOPLE}}'], stack: true },
+    text: '【直接の成果】\n{{RESULT_DIRECT}}\n\n【価値への取り組み】\n{{RESULT_VALUE}}\n\n【人材育成】\n{{RESULT_PEOPLE}}' },
   // ── 単独の欄
   { label: '今週の中心課題・取り組むテーマは何か',       token: '{{THEME}}' },
   { label: '何をどのように実践したか',                 token: '{{PRACTICE}}' },
@@ -479,6 +484,24 @@ function tkGCSAutoToken_(apply) {
       missLabel++;
       return;
     }
+    // text 指定：1つの欄に複数の目印をまとめて入れる
+    if (d.text) {
+      var one = tkGCSPick_(lb.box, blanks, 1);
+      if (!one.length) {
+        lines.push('🔴 回答欄が見つからない: ' + d.label +
+          ' 見出し位置 ' + Math.round(lb.box.l) + ',' + Math.round(lb.box.t));
+        missBox++;
+        return;
+      }
+      one[0].b.used = true;
+      lines.push('　【1欄にまとめて】' + d.label +
+        '（' + one[0].dir + Math.round(one[0].d) + 'pt ' + one[0].b.sh.getObjectId() +
+        ' 位置 ' + Math.round(one[0].b.box.l) + ',' + Math.round(one[0].b.box.t) + '）');
+      lines.push('　　' + d.text.replace(/\n/g, ' ／ '));
+      if (apply) { one[0].b.sh.getText().setText(d.text); pasted += 3; }
+      return;
+    }
+
     var toks = d.tokens || [d.token];
     if (toks.length === 1 && toks[0] === '') {
       var keep = tkGCSPick_(lb.box, blanks, 1);
@@ -497,7 +520,7 @@ function tkGCSAutoToken_(apply) {
     picks.forEach(function (p, i) {
       p.b.used = true;
       lines.push('　' + toks[i] + '  ←  ' + d.label +
-        '（' + p.dir + p.d + 'pt ' + p.b.sh.getObjectId() +
+        '（' + p.dir + Math.round(p.d) + 'pt ' + p.b.sh.getObjectId() +
         ' 位置 ' + Math.round(p.b.box.l) + ',' + Math.round(p.b.box.t) + '）');
       if (apply) { p.b.sh.getText().setText(toks[i]); pasted++; }
     });
