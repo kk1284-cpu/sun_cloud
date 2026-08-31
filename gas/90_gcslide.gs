@@ -341,18 +341,26 @@ function tkGCSMail_(mid, p, label, file) {
 //
 //  ★必ず「下見」で確認してから「貼る」を実行する。
 
+// 見出しから回答欄までの許容距離（pt）。これを超える箱は拾わない。
+//   飾りの図形を掴んでしまう事故を防ぐ。実測では見出しの直下 20〜60pt に回答欄がある。
+var TK_GCS_MAX_DIST = 130;
+
 // 見出しの文字 → 貼る目印。空文字は「本人が書く欄なので貼らない」
+//  ⚠ 並び順が結果を変える。先に処理した見出しが箱を取る。
+//    成果は1見出しに3欄なので、単独の見出しより**先**に置く。
+//    （後ろに置くと、隣のフィロソフィが3欄の1つ目を取ってしまう）
 var TK_GCS_LABELS = [
+  // ── 複数欄のものを先に
+  { label: '外に生み出した成果は何か直接の成果価値への取り組み人材育成',
+    tokens: ['{{RESULT_DIRECT}}', '{{RESULT_VALUE}}', '{{RESULT_PEOPLE}}'], stack: true },
+  // ── 単独の欄
   { label: '今週の中心課題・取り組むテーマは何か',       token: '{{THEME}}' },
   { label: '何をどのように実践したか',                 token: '{{PRACTICE}}' },
   { label: '鍵となる発見・気づきは何か予期せぬ成功・失敗は？', token: '{{INSIGHT}}' },
   { label: 'すぐに取り組むべきことは何か',             token: '{{NEXT}}' },
   { label: '用いたフィロソフィは',                    token: '{{PHILOSOPHY}}' },
   { label: '今週のＫeyTakeawayは何か',                token: '{{TAKEAWAY}}' },
-  // 成果は1つの見出しに3つの回答欄。左から 直接／価値／人材 の順に割り当てる
-  { label: '外に生み出した成果は何か直接の成果価値への取り組み人材育成',
-    tokens: ['{{RESULT_DIRECT}}', '{{RESULT_VALUE}}', '{{RESULT_PEOPLE}}'] },
-  // ▼ 本人が書く欄。貼らない（一覧に「貼らない」と出す）
+  // ── 本人が書く欄。貼らない（他の見出しに取られないよう確保だけする）
   { label: '目指していること・探求していること・大切にしていることなど', token: '' },
   { label: '効果的な計画として、どのようなことが考えられるか', token: '' },
   { label: '外的な変化は何か',                        token: '' },
@@ -381,7 +389,6 @@ function tkGCSWeeklySlide_(pres) {
   return hit;
 }
 
-// 図形の位置と大きさ。取れないものは null
 function tkGCSBox_(sh) {
   try {
     return { l: sh.getLeft(), t: sh.getTop(), w: sh.getWidth(), h: sh.getHeight() };
@@ -389,15 +396,17 @@ function tkGCSBox_(sh) {
 }
 
 // 見出しに対応する空欄を選ぶ
-//   ① 横に重なっていて、見出しより下にあるもののうち、いちばん近い
-//   ② 無ければ、縦に重なっていて右にあるもののうち、いちばん近い
-function tkGCSPick_(labelBox, blanks, want) {
+//   ① 横に重なっていて、見出しより下にあるもののうち近い順
+//   ② 無ければ、縦に重なっていて右にあるもののうち近い順
+//   いずれも TK_GCS_MAX_DIST を超えるものは候補にしない
+function tkGCSPick_(labelBox, blanks, want, stack) {
   var cand = [];
   blanks.forEach(function (b) {
     if (b.used) return;
     var ov = Math.min(labelBox.l + labelBox.w, b.box.l + b.box.w) - Math.max(labelBox.l, b.box.l);
     if (ov > Math.min(labelBox.w, b.box.w) * 0.35 && b.box.t >= labelBox.t - 2) {
-      cand.push({ b: b, d: b.box.t - labelBox.t, dir: '下' });
+      var d = b.box.t - labelBox.t;
+      if (d <= TK_GCS_MAX_DIST) cand.push({ b: b, d: d, dir: '下' });
     }
   });
   if (!cand.length) {
@@ -405,14 +414,16 @@ function tkGCSPick_(labelBox, blanks, want) {
       if (b.used) return;
       var ov = Math.min(labelBox.t + labelBox.h, b.box.t + b.box.h) - Math.max(labelBox.t, b.box.t);
       if (ov > 0 && b.box.l >= labelBox.l) {
-        cand.push({ b: b, d: b.box.l - labelBox.l, dir: '右' });
+        var d = b.box.l - labelBox.l;
+        if (d <= TK_GCS_MAX_DIST) cand.push({ b: b, d: d, dir: '右' });
       }
     });
   }
   cand.sort(function (x, y) { return x.d - y.d; });
-  // 成果のように複数欲しいときは、近い順に want 個。左→右の並びに直して返す
   var take = cand.slice(0, want || 1);
-  take.sort(function (x, y) { return x.b.box.l - y.b.box.l; });
+  // 複数欄のときの並び。縦積み(stack)なら上→下、そうでなければ左→右
+  if (stack) take.sort(function (x, y) { return x.b.box.t - y.b.box.t; });
+  else       take.sort(function (x, y) { return x.b.box.l - y.b.box.l; });
   return take;
 }
 
@@ -430,21 +441,20 @@ function tkGCSAutoToken_(apply) {
   var sl = tkGCSWeeklySlide_(pres);
   if (!sl) throw new Error('週次スライド（「今週の振り返り」を含むもの）が見つかりません');
 
-  // 空欄と見出しを集める
-  var blanks = [], labels = {};
+  var blanks = [], labels = {}, labelList = [];
   sl.getShapes().forEach(function (sh) {
     var t = '';
     try { t = tkGCSFlat_(sh.getText().asString()); } catch (e) {}
     var box = tkGCSBox_(sh);
     if (!box) return;
     if (!t) blanks.push({ sh: sh, box: box, used: false });
-    else labels[t] = { sh: sh, box: box };
+    else { labels[t] = { sh: sh, box: box }; labelList.push({ t: t, box: box }); }
   });
 
   var lines = ['=== 目印の貼り付け ' + (apply ? '【実行】' : '【下見・書き込みません】') + ' ===',
     'テンプレ: ' + pres.getName(),
     'スライド: ' + sl.getObjectId() + '（週次シート）',
-    '空欄 ' + blanks.length + '個 / 見出し ' + Object.keys(labels).length + '個', ''];
+    '空欄 ' + blanks.length + '個 / 見出し ' + labelList.length + '個', ''];
 
   var pasted = 0, missLabel = 0, missBox = 0;
 
@@ -452,7 +462,6 @@ function tkGCSAutoToken_(apply) {
     var key = tkGCSFlat_(d.label);
     var lb = labels[key];
     if (!lb) {
-      // 前方一致でも探す（見出しの文言が少し違う場合）
       Object.keys(labels).forEach(function (k) {
         if (!lb && (k.indexOf(key) === 0 || key.indexOf(k) === 0) && k.length > 6) lb = labels[k];
       });
@@ -464,29 +473,28 @@ function tkGCSAutoToken_(apply) {
     }
     var toks = d.tokens || [d.token];
     if (toks.length === 1 && toks[0] === '') {
-      // 本人が書く欄。回答欄を確保だけして「貼らない」と記録（他の見出しに取られないように）
       var keep = tkGCSPick_(lb.box, blanks, 1);
       if (keep.length) keep[0].b.used = true;
       lines.push('　（貼らない・本人記入）' + d.label);
       return;
     }
-    var picks = tkGCSPick_(lb.box, blanks, toks.length);
+    var picks = tkGCSPick_(lb.box, blanks, toks.length, d.stack);
     if (picks.length < toks.length) {
       lines.push('🔴 回答欄が足りない: ' + d.label +
-        '（必要' + toks.length + '・見つかった' + picks.length + '）');
+        '（必要' + toks.length + '・見つかった' + picks.length + '）' +
+        ' 見出し位置 ' + Math.round(lb.box.l) + ',' + Math.round(lb.box.t));
       missBox++;
       return;
     }
     picks.forEach(function (p, i) {
       p.b.used = true;
       lines.push('　' + toks[i] + '  ←  ' + d.label +
-        '（' + p.dir + 'の欄 ' + p.b.sh.getObjectId() +
+        '（' + p.dir + p.d + 'pt ' + p.b.sh.getObjectId() +
         ' 位置 ' + Math.round(p.b.box.l) + ',' + Math.round(p.b.box.t) + '）');
       if (apply) { p.b.sh.getText().setText(toks[i]); pasted++; }
     });
   });
 
-  // 見出し行（氏名・部署・週・件数）。週次シートに置き場所が無いので新しく作る
   var HEAD = '{{NAME}}さん（{{DEPT}}）　{{WEEK}}　日報{{COUNT}}';
   var already = false;
   sl.getShapes().forEach(function (sh) {
@@ -505,8 +513,25 @@ function tkGCSAutoToken_(apply) {
     lines.push('', '見出し行を左上に作ります（いまは作っていません）: ' + HEAD);
   }
 
+  // 下見では全体の座標も出す。対応づけを人が検算できるようにするため
+  if (!apply) {
+    lines.push('', '── 見出しの位置 ──');
+    labelList.sort(function (a, b) { return a.box.t - b.box.t || a.box.l - b.box.l; });
+    labelList.forEach(function (x) {
+      lines.push('  ' + Math.round(x.box.l) + ',' + Math.round(x.box.t) +
+        ' (' + Math.round(x.box.w) + 'x' + Math.round(x.box.h) + ') ' + x.t.slice(0, 34));
+    });
+    lines.push('', '── 空欄の位置（★は未割り当て）──');
+    var bs = blanks.slice().sort(function (a, b) { return a.box.t - b.box.t || a.box.l - b.box.l; });
+    bs.forEach(function (b) {
+      lines.push('  ' + (b.used ? '  ' : '★') + ' ' +
+        Math.round(b.box.l) + ',' + Math.round(b.box.t) +
+        ' (' + Math.round(b.box.w) + 'x' + Math.round(b.box.h) + ') ' + b.sh.getObjectId());
+    });
+  }
+
   var rest = blanks.filter(function (b) { return !b.used; }).length;
-  lines.push('', '割り当てなかった空欄: ' + rest + '個（飾りや枠の可能性）');
+  lines.push('', '割り当てなかった空欄: ' + rest + '個');
   if (apply) {
     lines.push('貼った目印: ' + pasted + '個');
     lines.push('', '次にやること: tkGCスライド_個人フォルダ準備() → tkGCスライド_先週分を作る()');
