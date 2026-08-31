@@ -32,7 +32,10 @@ var TK_BULK = {
   BATCH: 15,           // Gemini 1回でまとめて判定する件数
                        //   判定がぼやける感じがしたら 10 に下げる。
   PACE_MS: 1500,       // バッチ間の待ち
-  MAX_BATCHES: 0,      // 1回の実行で呼ぶGeminiの最大回数（0=無制限）。キャッチアップでは2に絞る
+  MAX_BATCHES: 0,      // 1回の実行で呼ぶGeminiの最大回数（0=無制限）
+  CATCHUP_BATCHES: 8,  // キャッチアップ1回で呼ぶ回数。BATCH×これ＝1時間あたりの処理件数。
+                       //   案内メッセージもここを見るので、数字がずれない。
+                       //   2026-08-31 有料枠にしたので 2 → 8（30件/時 → 120件/時）
   RETRY: 2,            // 429/5xx のときの再試行回数
   RETRY_WAIT_MS: 8000, // 再試行までの待ち（1日上限なら待っても無駄なので短く）
   TRIGGER_FN: 'tk一括分類_継続',
@@ -48,7 +51,8 @@ function tkキャッチアップ_設定() {
   });
   ScriptApp.newTrigger('tk日次キャッチアップ').timeBased().everyHours(1).create();
   var msg = '1時間ごとの自動判定（キャッチアップ）を設定しました。\n'
-          + '未判定の日報を、1回あたり最大' + (TK_BULK.BATCH * 2) + '件（API 2回）まで処理します。\n\n'
+          + '未判定の日報を、1回あたり最大' + (TK_BULK.BATCH * TK_BULK.CATCHUP_BATCHES)
+            + '件（API ' + TK_BULK.CATCHUP_BATCHES + '回）まで処理します。\n\n'
           + '※ あわせて config の TK.CLASSIFY_ON_SUBMIT が false になっていることを確認してください。';
   tkLog_('キャッチアップ', msg);
   Logger.log(msg);
@@ -57,7 +61,7 @@ function tkキャッチアップ_設定() {
 
 function tk日次キャッチアップ() {
   var saveMax = TK_BULK.MAX_BATCHES, savePace = TK_BULK.PACE_MS;
-  TK_BULK.MAX_BATCHES = 8;      // 1回の実行でAPIは最大8回＝120件/時
+  TK_BULK.MAX_BATCHES = TK_BULK.CATCHUP_BATCHES;   // 上の CATCHUP_BATCHES に従う
                                 //   2026-08-31 有料枠に切り替えたので 2 から上げた。
                                 //   無料枠(5回/分)に戻す場合は 2 に戻す。
   TK_BULK.PACE_MS = 3000;
