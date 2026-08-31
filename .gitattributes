@@ -1,0 +1,7 @@
+# .gs などは Drive の原本とバイト一致させる。改行を変換させない。
+# core.autocrlf=true の環境ではチェックアウト時にCRLFへ変換され、
+# tools/verify_gas.py がサイズ不一致で落ちる（実際に3本落ちた）。
+*.gs             -text
+*.sample         -text
+*.tsv            -text
+appsscript.json  -text

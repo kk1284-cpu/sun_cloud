@@ -10,18 +10,18 @@ appsscript.json	1wSljrPs5kGzDTA3k73svqPxfXOOtEATM	720	done
 config.gs.sample	1XdJdz141LpB2tojHz49bmGLzmPOwO3Ly	4579	done
 _util.gs	1ql3FpWqK-RUjmmayFlgUMFxi2QPidYDN	6430	done
 コード.gs	1oAeQ2j8xgAS1SYBEtkMyzgDUh-8XXbhB	5727	done
-10_classify.gs	1NzAqHfl1tZIDAFQwOwYrHIaN-6l_xXQp	8145	pending
-15_ingest.gs	1EOjwHRMdyAINuBKCLUuSB6ikaqkaXH5G	14673	pending
-20_katsudo.gs	1_CvzWqFGTbPQRVIVhT2faIyliH71gfnL	4633	pending
-30_okr.gs	1e49GSOR2oynmd3hlk5UzaVjA7ECpmBdY	14479	pending
-40_ouen.gs	1-MBInvWwZg10eLvgRmHZbdixDsr8pJQF	8354	pending
-50_report.gs	1LNMPk-x1i5MSnJvNXjb4ZhsXbmymbrxK	5714	pending
-60_setup.gs	1V3xAccO_i85oczZBQ6mRfxkgL4dTFe06	11486	pending
-70_gc.gs	1ZCaRCNRT8y_4Vi0Po9TS_hnbncI-1LJ2	10749	pending
-80_bulk.gs	1lPmf83tFYruiZA56FMzfM4q-pga7QHlS	27145	pending
-90_gcslide.gs	1mtfwhQu7oIZ5PdlRSSU48hkU-jM7T_nA	16328	pending
-95_philosophy.gs	17-jX1qe3YWR9eOHUhwrzh3OUhYoxTJYd	7650	pending
-criteria.gs	1envFaUPrFaZoEH5hI1PPy7t-MWEPJejw	20215	pending
+10_classify.gs	1NzAqHfl1tZIDAFQwOwYrHIaN-6l_xXQp	8145	done
+15_ingest.gs	1EOjwHRMdyAINuBKCLUuSB6ikaqkaXH5G	14673	done
+20_katsudo.gs	1_CvzWqFGTbPQRVIVhT2faIyliH71gfnL	4633	done
+30_okr.gs	1e49GSOR2oynmd3hlk5UzaVjA7ECpmBdY	14479	done
+40_ouen.gs	1-MBInvWwZg10eLvgRmHZbdixDsr8pJQF	8354	done
+50_report.gs	1LNMPk-x1i5MSnJvNXjb4ZhsXbmymbrxK	5714	done
+60_setup.gs	1V3xAccO_i85oczZBQ6mRfxkgL4dTFe06	11486	done
+70_gc.gs	1ZCaRCNRT8y_4Vi0Po9TS_hnbncI-1LJ2	10749	done
+80_bulk.gs	1lPmf83tFYruiZA56FMzfM4q-pga7QHlS	27145	done
+90_gcslide.gs	1mtfwhQu7oIZ5PdlRSSU48hkU-jM7T_nA	16328	done
+95_philosophy.gs	17-jX1qe3YWR9eOHUhwrzh3OUhYoxTJYd	7650	done
+criteria.gs	1envFaUPrFaZoEH5hI1PPy7t-MWEPJejw	20215	done
 # config.gs はGemini APIキーが直書きのため入れない（config.gs.sample を使う）
 config.gs	16oaA1I6LMd-pCGRpEHpi42mxp8JSKTTM	11866	excluded
 # 一括貼付用は上記の連結。原本はDriveに置いたまま、必要なら連結して作る
