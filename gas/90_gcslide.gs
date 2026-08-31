@@ -345,6 +345,10 @@ function tkGCSMail_(mid, p, label, file) {
 //   飾りの図形を掴んでしまう事故を防ぐ。実測では見出しの直下 20〜60pt に回答欄がある。
 var TK_GCS_MAX_DIST = 130;
 
+// 回答欄の最小の大きさ（pt）。これより小さい図形は回答欄とみなさない。
+//   実測: 本物は 100x32 〜 220x151。チェックボックスや飾りは 32x19 で混じってくる。
+var TK_GCS_MIN_W = 60, TK_GCS_MIN_H = 25;
+
 // 見出しの文字 → 貼る目印。空文字は「本人が書く欄なので貼らない」
 //  ⚠ 並び順が結果を変える。先に処理した見出しが箱を取る。
 //    成果は1見出しに3欄なので、単独の見出しより**先**に置く。
@@ -441,20 +445,24 @@ function tkGCSAutoToken_(apply) {
   var sl = tkGCSWeeklySlide_(pres);
   if (!sl) throw new Error('週次スライド（「今週の振り返り」を含むもの）が見つかりません');
 
-  var blanks = [], labels = {}, labelList = [];
+  var blanks = [], labels = {}, labelList = [], tiny = [];
   sl.getShapes().forEach(function (sh) {
     var t = '';
     try { t = tkGCSFlat_(sh.getText().asString()); } catch (e) {}
     var box = tkGCSBox_(sh);
     if (!box) return;
-    if (!t) blanks.push({ sh: sh, box: box, used: false });
+    if (!t) {
+      if (box.w < TK_GCS_MIN_W || box.h < TK_GCS_MIN_H) { tiny.push({ sh: sh, box: box }); return; }
+      blanks.push({ sh: sh, box: box, used: false });
+    }
     else { labels[t] = { sh: sh, box: box }; labelList.push({ t: t, box: box }); }
   });
 
   var lines = ['=== 目印の貼り付け ' + (apply ? '【実行】' : '【下見・書き込みません】') + ' ===',
     'テンプレ: ' + pres.getName(),
     'スライド: ' + sl.getObjectId() + '（週次シート）',
-    '空欄 ' + blanks.length + '個 / 見出し ' + labelList.length + '個', ''];
+    '空欄 ' + blanks.length + '個 / 見出し ' + labelList.length + '個'
+      + (tiny.length ? '（小さすぎて除外 ' + tiny.length + '個）' : ''), ''];
 
   var pasted = 0, missLabel = 0, missBox = 0;
 
