@@ -21,7 +21,7 @@
 var SECRET_CONFIG = {
   // ▼要設定：Gemini APIキー（カンマ区切りで複数可＝429時フォールバック）
   GEMINI_API_KEYS: '',
-  GEMINI_MODEL: 'gemini-flash-latest',
+  GEMINI_MODEL: 'gemini-3.5-flash',
   // ▼要設定：Webアプリ用トークン（?key= で照合。任意の推測されにくい文字列）
   APP_TOKEN: 'CHANGE_ME'
 };

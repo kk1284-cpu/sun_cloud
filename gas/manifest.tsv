@@ -7,7 +7,7 @@
 # config.gs.sample だけは APP_TOKEN を 'CHANGE_ME' に伏せているため
 # 原本より4バイト短い。verify_gas.py がその分を差し引いて照合する。
 appsscript.json	1wSljrPs5kGzDTA3k73svqPxfXOOtEATM	720	done
-config.gs.sample	1XdJdz141LpB2tojHz49bmGLzmPOwO3Ly	4579	done
+config.gs.sample	1XdJdz141LpB2tojHz49bmGLzmPOwO3Ly	4576	done
 _util.gs	1ql3FpWqK-RUjmmayFlgUMFxi2QPidYDN	6430	done
 コード.gs	1oAeQ2j8xgAS1SYBEtkMyzgDUh-8XXbhB	5727	done
 10_classify.gs	1NzAqHfl1tZIDAFQwOwYrHIaN-6l_xXQp	8145	done
@@ -23,6 +23,6 @@ _util.gs	1ql3FpWqK-RUjmmayFlgUMFxi2QPidYDN	6430	done
 95_philosophy.gs	17-jX1qe3YWR9eOHUhwrzh3OUhYoxTJYd	7650	done
 criteria.gs	1envFaUPrFaZoEH5hI1PPy7t-MWEPJejw	20215	done
 # config.gs はGemini APIキーが直書きのため入れない（config.gs.sample を使う）
-config.gs	16oaA1I6LMd-pCGRpEHpi42mxp8JSKTTM	11866	excluded
+config.gs	16oaA1I6LMd-pCGRpEHpi42mxp8JSKTTM	11863	excluded
 # 一括貼付用は上記の連結。原本はDriveに置いたまま、必要なら連結して作る
-MCQ113_一括貼付用.gs	1XiPuL0qcbYJCTwH4Yo6JuBZjuf1WP2_1	174093	excluded
+MCQ113_一括貼付用.gs	1XiPuL0qcbYJCTwH4Yo6JuBZjuf1WP2_1	174090	excluded
