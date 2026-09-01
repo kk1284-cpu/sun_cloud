@@ -19,7 +19,7 @@ _util.gs	1ql3FpWqK-RUjmmayFlgUMFxi2QPidYDN	6430	done
 60_setup.gs	1V3xAccO_i85oczZBQ6mRfxkgL4dTFe06	11486	done
 70_gc.gs	1ZCaRCNRT8y_4Vi0Po9TS_hnbncI-1LJ2	10749	done
 80_bulk.gs	1lPmf83tFYruiZA56FMzfM4q-pga7QHlS	29277	done
-90_gcslide.gs	1mtfwhQu7oIZ5PdlRSSU48hkU-jM7T_nA	33380	done
+90_gcslide.gs	1mtfwhQu7oIZ5PdlRSSU48hkU-jM7T_nA	35099	done
 95_philosophy.gs	17-jX1qe3YWR9eOHUhwrzh3OUhYoxTJYd	7650	done
 criteria.gs	1envFaUPrFaZoEH5hI1PPy7t-MWEPJejw	20215	done
 # config.gs はGemini APIキーが直書きのため入れない（config.gs.sample を使う）

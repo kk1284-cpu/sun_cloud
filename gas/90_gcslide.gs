@@ -180,6 +180,26 @@ function tkGCスライド_トリガー設定() {
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
 }
 
+// ============================================================
+//  混み合ったときの再挑戦
+// ============================================================
+//  Drive/Slides は連続で叩くと「不明なエラーが発生しました」を返すことがある。
+//  中身の問題ではなく一時的なものなので、少し待ってやり直せば通る。
+//  待ち時間は 2秒 → 5秒 → 12秒 と延ばす。
+var TK_GCS_WAIT = [2000, 5000, 12000];
+
+function tkGCSRetry_(fn) {
+  var last = null;
+  for (var i = 0; i <= TK_GCS_WAIT.length; i++) {
+    try { return fn(); }
+    catch (e) {
+      last = e;
+      if (i < TK_GCS_WAIT.length) Utilities.sleep(TK_GCS_WAIT[i]);
+    }
+  }
+  throw last;
+}
+
 function tkGCSBuild_(offsetWeeks) {
   var c = TK.GC_SLIDE;
   if (!c || !c.TEMPLATE_ID) {
@@ -202,7 +222,7 @@ function tkGCSBuild_(offsetWeeks) {
   }
 
   var work = tkGCSWorkFolder_();
-  var done = 0, skipped = 0, lines = ['=== 下書き入りGCシートの作成（' + label + '） ==='];
+  var done = 0, skipped = 0, failed = 0, lines = ['=== 下書き入りGCシートの作成（' + label + '） ==='];
 
   ids.slice(0, TK_GC.MAX_MEMBERS).forEach(function (mid) {
     var p = per[mid];
@@ -215,8 +235,20 @@ function tkGCSBuild_(offsetWeeks) {
       return;
     }
 
-    var copy = DriveApp.getFileById(c.TEMPLATE_ID).makeCopy(fname, folder);
-    var pres = SlidesApp.openById(copy.getId());
+    // ⚠ Drive/Slides は混み合うと「不明なエラー」を返す（2026-09-01 実際に発生）。
+    //    1人分の失敗で全員分を落とさないよう、ここから1人ずつ包む。
+    //    金曜の自動実行では作り直せないので、取りこぼしを残さないことが大事。
+    var copy, pres;
+    try {
+      copy = tkGCSRetry_(function () {
+        return DriveApp.getFileById(c.TEMPLATE_ID).makeCopy(fname, folder);
+      });
+      pres = SlidesApp.openById(copy.getId());
+    } catch (e) {
+      failed++;
+      lines.push('　🔴 失敗: ' + (p.name || mid) + '（' + (e && e.message) + '）');
+      return;
+    }
 
     var d = tkGCDraftText_(p, range);            // 70_gc.gs のAI下書きをそのまま使う
     // 箱に収まる分だけ。3件を超えたら件数で示す
@@ -245,7 +277,12 @@ function tkGCSBuild_(offsetWeeks) {
     Object.keys(map).forEach(function (k) {
       try { pres.replaceAllText(k, map[k], false); } catch (e) {}
     });
-    pres.saveAndClose();
+    try { pres.saveAndClose(); }
+    catch (e) {
+      failed++;
+      lines.push('　🔴 保存できず: ' + (p.name || mid) + '（' + (e && e.message) + '）');
+      return;
+    }
 
     if (c.SHARE_WITH_MEMBER) { try { copy.addEditor(mid); } catch (e) {} }
     if (c.MAIL) { try { tkGCSMail_(mid, p, label, copy); } catch (e) {} }
@@ -255,11 +292,14 @@ function tkGCSBuild_(offsetWeeks) {
   });
 
   lines.push('');
-  lines.push('作成 ' + done + '名／スキップ ' + skipped + '名');
+  lines.push('作成 ' + done + '名／スキップ ' + skipped + '名' +
+    (failed ? '／🔴失敗 ' + failed + '名' : ''));
+  if (failed) lines.push('※ 失敗した方は、もう一度この関数を実行すれば作られます（できている分はスキップされます）。');
   lines.push('※ 3分類は事実の振り分け、文章欄はAIの下書きです。ご本人が確認・微修正してお使いください。');
   lines.push('※ 外的/内的な変化・ドラッカーのコンセプト・フィロソフィ目標は空欄のままです（ご本人の記入欄）。');
   var msg = lines.join('\n');
-  tkLog_('GCスライド', '作成 ' + done + '名・スキップ ' + skipped + '名（' + label + '）');
+  tkLog_('GCスライド', '作成 ' + done + '名・スキップ ' + skipped + '名' +
+    (failed ? '・失敗 ' + failed + '名' : '') + '（' + label + '）');
   Logger.log(msg);
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
   return { members: done, skipped: skipped, week: label };
