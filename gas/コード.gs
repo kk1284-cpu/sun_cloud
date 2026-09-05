@@ -11,14 +11,24 @@
 //    ?action=monthlyReport&y=2026&m=8       月次レポート生成
 //  Web表示（HTML）:
 //    ?view=okr&member=<メール>&key=APP_TOKEN 到達マンダラ
+//    ?view=gc&key=APP_TOKEN                 GC下書きの一覧（推進メンバー向け・直近の週）
+//      &days=10 で遡る日数、&group=薬局・ネットワーク で部署を絞る
 // ============================================================
 
 function doGet(e) {
   var p = (e && e.parameter) || {};
 
+  // ---- HTMLビュー（GC下書き一覧：推進メンバーが「どこで見るか」の答え）----
+  if (p.view === 'gc') {
+    if (p.key !== tkSecret_('APP_TOKEN')) {
+      return HtmlService.createHtmlOutput('<p style="font-family:sans-serif;padding:24px">アクセスキーが必要です。</p>');
+    }
+    return tkGCSListHtml_(p.key, { days: +p.days || 10, group: String(p.group || '').trim() });
+  }
+
   // ---- HTMLビュー（到達マンダラ）----
   if (p.view === 'okr') {
-    if (p.key !== SECRET_CONFIG.APP_TOKEN) {
+    if (p.key !== tkSecret_('APP_TOKEN')) {
       return HtmlService.createHtmlOutput('<p style="font-family:sans-serif;padding:24px">アクセスキーが必要です。</p>');
     }
     var mem = String(p.member || '').trim();
@@ -29,7 +39,7 @@ function doGet(e) {
   // ---- JSON API ----
   var out;
   try {
-    if (p.key !== SECRET_CONFIG.APP_TOKEN) out = { ok: false, error: 'bad key' };
+    if (p.key !== tkSecret_('APP_TOKEN')) out = { ok: false, error: 'bad key' };
     else if (p.action === 'status')        out = tkStatus_();
     // 未分類のまとめ判定はバッチ版を使う（1件1API の旧 tkProcessBacklog_ は無料枠を食い潰す）
     else if (p.action === 'backlog')       out = tkBulkRun_();
@@ -58,7 +68,7 @@ function tkStatus_() {
   function n(name) { var s = ss.getSheetByName(name); return s ? Math.max(0, s.getLastRow() - 1) : '(なし)'; }
   var rawSh = tkRawSheet_();
   var triggers = ScriptApp.getProjectTriggers().map(function (t) { return t.getHandlerFunction(); });
-  var gk = String(SECRET_CONFIG.GEMINI_API_KEYS || '');
+  var gk = tkSecret_('GEMINI_API_KEYS');
   return {
     ok: true, ssId: ss.getId(),
     sheets: {
@@ -91,6 +101,12 @@ function onOpen() {
       .addItem('⑨ 自動判定を設定（1時間ごと・最初に1回）', 'tkキャッチアップ_設定')
       .addItem('⑩ 分類の進捗を見る', 'tk一括分類_状況')
       .addItem('⑪ APIキーの診断', 'tkAPIキー確認')
+      .addSeparator()
+      .addItem('⑫ GC下書きを今すぐ作る（部署を選ぶ）', 'tkGC下書き_今すぐ作る')
+      .addItem('⑬ 設定シートを作る（GC設定・推進メンバー・取込ソース／1回）', 'tk設定シート_作成')
+      .addItem('⑬- 推進メンバーに下書きフォルダを共有', 'tkGCスライド_推進メンバーに共有')
+      .addItem('⑭ GCの自動作成を毎日17:30に設定（金曜固定をやめる／1回）', 'tkGC_トリガー設定')
+      .addItem('⑮ AIの鍵をスクリプトプロパティに登録', 'tk鍵を登録')
       .addToUi();
   } catch (e) {}
 }

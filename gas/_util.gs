@@ -86,13 +86,59 @@ function tkRawSheet_() {
   return null;
 }
 
+// ---------- 秘密の値（スクリプトプロパティ優先 → config の SECRET_CONFIG） ----------
+//  五十嵐と同じ方式。プロパティに入れておけばコードに鍵を書かずに済み、Git管理できる。
+//  名前: GEMINI_API_KEYS / GEMINI_MODEL / APP_TOKEN
+function tkSecret_(name) {
+  var v = '';
+  try { v = PropertiesService.getScriptProperties().getProperty(name) || ''; } catch (e) {}
+  if (!v && typeof SECRET_CONFIG !== 'undefined') v = SECRET_CONFIG[name] || '';
+  return String(v || '').trim();
+}
+function tkGeminiKeys_() {
+  return tkSecret_('GEMINI_API_KEYS').split(',').map(function (s) { return s.trim(); }).filter(String);
+}
+function tkGeminiModel_() { return tkSecret_('GEMINI_MODEL') || 'gemini-flash-latest'; }
+
+// エディタから実行：鍵をスクリプトプロパティに登録する（値はログに出さない）
+function tk鍵を登録() {
+  var ui = SpreadsheetApp.getUi();
+  var names = ['GEMINI_API_KEYS', 'GEMINI_MODEL', 'APP_TOKEN'];
+  var props = PropertiesService.getScriptProperties();
+  var done = [];
+  names.forEach(function (n) {
+    var cur = props.getProperty(n) || '';
+    var state = cur ? '登録済み' : (SECRET_CONFIG[n] ? 'config.gs の値を使用中' : '未設定');
+    var r = ui.prompt('AIの鍵を登録', n + '\n（いま: ' + state + '）\n新しい値を入れて OK。空のまま OK で変更なし。', ui.ButtonSet.OK_CANCEL);
+    if (r.getSelectedButton() !== ui.Button.OK) return;
+    var v = String(r.getResponseText() || '').trim();
+    if (v) { props.setProperty(n, v); done.push(n); }
+  });
+  var msg = done.length ? ('登録しました: ' + done.join(', ') + '\n\nconfig.gs の同じ項目は空にして構いません。')
+                        : '変更はありませんでした。';
+  tkLog_('鍵', done.length ? '登録: ' + done.join(', ') : '変更なし');
+  ui.alert(msg);
+}
+// どこから読んでいるかを見る（値は出さない）
+function tk鍵の状態() {
+  var props = PropertiesService.getScriptProperties();
+  var lines = ['=== 秘密の値の置き場 ==='];
+  ['GEMINI_API_KEYS', 'GEMINI_MODEL', 'APP_TOKEN'].forEach(function (n) {
+    var p = props.getProperty(n), c = SECRET_CONFIG[n];
+    lines.push('　' + n + ': ' + (p ? 'スクリプトプロパティ' : (c ? 'config.gs' : '⚠ 未設定')) +
+      (n === 'GEMINI_API_KEYS' && (p || c) ? '（' + String(p || c).split(',').length + '本）' : ''));
+  });
+  var msg = lines.join('\n'); Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
+  return msg;
+}
+
 // ---------- Gemini（gas_nippo と同じ方式・JSON強制） ----------
 function tkGeminiJson_(prompt, schema) {
-  var keys = String(SECRET_CONFIG.GEMINI_API_KEYS).split(',')
-    .map(function (s) { return s.trim(); }).filter(String);
+  var keys = tkGeminiKeys_();
   if (!keys.length) return { ok: false, error: 'Gemini APIキー未設定' };
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-    SECRET_CONFIG.GEMINI_MODEL + ':generateContent';
+    tkGeminiModel_() + ':generateContent';
   var payload = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: 0.1 }
@@ -121,11 +167,10 @@ function tkGeminiJson_(prompt, schema) {
 // Gemini（自由文・JSONなし）。応援文/レポート生成用。
 function tkGeminiText_(prompt, opt) {
   opt = opt || {};
-  var keys = String(SECRET_CONFIG.GEMINI_API_KEYS).split(',')
-    .map(function (s) { return s.trim(); }).filter(String);
+  var keys = tkGeminiKeys_();
   if (!keys.length) return '';
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-    SECRET_CONFIG.GEMINI_MODEL + ':generateContent';
+    tkGeminiModel_() + ':generateContent';
   var payload = {
     contents: [{ parts: [{ text: prompt }] }],
     generationConfig: { temperature: opt.temperature || 0.7, maxOutputTokens: opt.maxTokens || 2048 }

@@ -24,7 +24,15 @@
 //    tk取込_状況()            … ソースごとの件数と未取込数
 //    tk取込_ソース確認()       … 各ソースの列見出しを実物から表示（設定合わせに使う）
 //
-//  ⚠ 取り込んだだけでは分類されない。分類は tk日次キャッチアップ() が行う。
+//  取り込んだ直後に tk日次キャッチアップ() を続けて呼ぶ（tk取込トリガー）。
+//  → 日報が書かれてから最長30分で判定まで終わる（以前は取込30分＋判定1時間＝最長90分）。
+//
+//  ★2026-09-06 変更
+//   ・身分証を「ソース#シートID#行番号」から「ソース#送信日時#氏名」に変えた。
+//     元シートが並べ替え・行削除されても二重取込／取りこぼしが起きない（五十嵐で実際に起きた事故の予防）。
+//     旧キーも併用するので既存2,500件の再取込は起きない。移行作業なし。
+//   ・列を**見出し名**で解けるようにした（BODY_COLS の head、シート「取込ソース」の AUTO）。
+//     設問を編集・並べ替えしても壊れない。
 // ============================================================
 
 var TK_UNI_HEADER = ['タイムスタンプ', 'メール', '氏名', '部署', '本文',
@@ -34,11 +42,12 @@ var TK_UNI_HEADER = ['タイムスタンプ', 'メール', '氏名', '部署', '
 //  取り込み本体
 // ============================================================
 function tk取込_全ソース() {
-  var srcs = (TK.SOURCES || []).filter(function (s) { return s.ENABLED !== false; });
-  if (!srcs.length) throw new Error('TK.SOURCES が未設定です（config.gs）');
+  var srcs = tkSetAllSources_();   // config.gs の TK.SOURCES ＋ シート「取込ソース」
+  if (!srcs.length) throw new Error('取込ソースがありません（config.gs の TK.SOURCES か、シート「取込ソース」）');
 
   var out = tkEnsureSheet_(TK.SHEET_RAW, TK_UNI_HEADER);
-  var seen = tkUniSeen_(out);
+  var seenAll = tkUniSeen_(out);
+  var seen = seenAll.rows, seen2 = seenAll.ids;
   var roster = tkUniRoster_();
   var rows = [], lines = ['=== 日報の取り込み ==='];
 
@@ -54,15 +63,19 @@ function tk取込_全ソース() {
       if (last < 2) return;
 
       var width = sh.getLastColumn();
+      var head = sh.getRange(1, 1, 1, width).getValues()[0];
+      var cols = tkUniResolve_(src, head);          // 見出し名 → 列番号
+      cols.warn.forEach(function (w) { lines.push('　⚠ ' + src.NAME + '「' + sh.getName() + '」: ' + w); });
+      if (cols.name == null && src.AUTO) return;     // 誰の日報か分からないシートは取り込まない
       var vals = sh.getRange(2, 1, last - 1, width).getValues();
 
       for (var i = 0; i < vals.length; i++) {
         var rowNo = i + 2;
-        var key = src.ID + '#' + sid + '#' + rowNo;
+        var key = src.ID + '#' + sid + '#' + rowNo;          // 旧キー（行番号）
         if (seen[key]) { skip++; continue; }
 
         var v = vals[i];
-        var ts = v[src.COL_TS != null ? src.COL_TS : 0];
+        var ts = v[cols.ts];
         if (!(ts instanceof Date)) { var d = new Date(ts); ts = isNaN(d.getTime()) ? '' : d; }
         if (!ts) { skip++; continue; }
         if (src.SINCE) {
@@ -70,23 +83,26 @@ function tk取込_全ソース() {
           if (ts < since) { skip++; continue; }
         }
 
-        var rawName = src.COL_NAME != null ? String(v[src.COL_NAME] || '') : '';
+        var rawName = cols.name != null ? String(v[cols.name] || '') : '';
         var name = tkUniPersonName_(rawName, roster);
-        var email = src.COL_EMAIL != null ? String(v[src.COL_EMAIL] || '').trim() : '';
+        var email = cols.email != null ? String(v[cols.email] || '').trim() : '';
         if (!email && name && roster.byName[name]) email = roster.byName[name];
 
-        var body = tkUniBody_(v, src);
+        var key2 = tkUniIdKey_(src.ID, ts, name);            // 新キー（日時＋氏名）
+        if (seen2[key2]) { skip++; continue; }
+
+        var body = tkUniBody_(v, cols.body);
         if (!body) { skip++; continue; }   // 本文が全部空の行は取り込まない
 
         rows.push([
           ts, email, name, src.DEPT || '',
           tkSafeCell_(body),
           src.ID, sid + '#' + rowNo,
-          tkSafeCell_(tkUniPick_(v, src.COL_WEEKGOAL)),
-          tkSafeCell_(tkUniPick_(v, src.COL_RESOURCE)),
-          tkSafeCell_(tkUniNote_(v, src))
+          tkSafeCell_(tkUniPick_(v, cols.weekgoal)),
+          tkSafeCell_(tkUniPick_(v, cols.resource)),
+          tkSafeCell_(tkUniNote_(v, cols.notes))
         ]);
-        seen[key] = 1;
+        seen[key] = 1; seen2[key2] = 1;
         got++;
       }
       });
@@ -105,7 +121,7 @@ function tk取込_全ソース() {
 
   lines.push('');
   lines.push('合計 ' + rows.length + '件を「' + TK.SHEET_RAW + '」に追加しました。');
-  lines.push('※ 分類は tk日次キャッチアップ()（1時間ごと）が行います。');
+  lines.push('※ 自動取込（30分ごと）のときは、続けて判定まで行います。手で実行したときは ② で判定してください。');
   var msg = lines.join('\n');
   tkLog_('取込', '追加 ' + rows.length + '件');
   Logger.log(msg);
@@ -113,10 +129,68 @@ function tk取込_全ソース() {
   return { added: rows.length };
 }
 
+// ---------- 列の解決（見出し名 → 列番号） ----------
+function tkUniNorm_(s) { return String(s == null ? '' : s).replace(/[\s　]+/g, '').trim(); }
+// 完全一致 → 前方一致 → 部分一致
+function tkUniFindHead_(head, want) {
+  var w = tkUniNorm_(want); if (!w) return -1;
+  var hs = head.map(tkUniNorm_);
+  var i = hs.indexOf(w); if (i >= 0) return i;
+  for (i = 0; i < hs.length; i++) if (hs[i] && hs[i].indexOf(w) === 0) return i;
+  for (i = 0; i < hs.length; i++) if (hs[i] && hs[i].indexOf(w) >= 0) return i;
+  return -1;
+}
+//  config 定義（従来）: BODY_COLS の col を使う。head があれば見出し名で解き、無ければ col。
+//  シート定義（AUTO）  : 見出しから全部決める。名前・メール・タイムスタンプ以外の見出し付き列を本文にする。
+function tkUniResolve_(src, head) {
+  var r = { ts: src.COL_TS != null ? src.COL_TS : 0, name: src.COL_NAME, email: src.COL_EMAIL,
+            body: [], weekgoal: src.COL_WEEKGOAL, resource: src.COL_RESOURCE, notes: [], warn: [] };
+  if (!src.AUTO) {
+    (src.BODY_COLS || []).forEach(function (c) {
+      var col = c.col;
+      if (c.head) {
+        var i = tkUniFindHead_(head, c.head);
+        if (i >= 0) col = i; else r.warn.push('見出し「' + c.head + '」が見つからず、列' + c.col + 'を使いました');
+      }
+      if (col != null) r.body.push({ col: col, label: c.label || String(head[col] || '') });
+    });
+    (src.NOTE_COLS || []).forEach(function (c) { r.notes.push(c); });
+    if (src.HEAD_NAME)  { var n = tkUniFindHead_(head, src.HEAD_NAME);  if (n >= 0) r.name = n; }
+    if (src.HEAD_EMAIL) { var m = tkUniFindHead_(head, src.HEAD_EMAIL); if (m >= 0) r.email = m; }
+    return r;
+  }
+  var iTs = tkUniFindHead_(head, 'タイムスタンプ'); r.ts = iTs >= 0 ? iTs : 0;
+  var iName = src.HEAD_NAME ? tkUniFindHead_(head, src.HEAD_NAME) : -1;
+  ['名前', '氏名', 'お名前'].forEach(function (k) { if (iName < 0) iName = tkUniFindHead_(head, k); });
+  r.name = iName >= 0 ? iName : null;
+  var iMail = src.HEAD_EMAIL ? tkUniFindHead_(head, src.HEAD_EMAIL) : -1;
+  if (iMail < 0) iMail = tkUniFindHead_(head, 'メール');
+  r.email = iMail >= 0 ? iMail : null;
+  r.weekgoal = null; r.resource = null;
+  head.forEach(function (h, i) {
+    var t = String(h || '').trim(); if (!t) return;
+    if (i === r.ts || i === r.name || i === r.email) return;
+    if (/^列\s*\d+$/.test(t)) return;                      // Googleフォームが付ける名無しの列
+    if (r.weekgoal == null && /目標/.test(t)) { r.weekgoal = i; return; }
+    if (r.resource == null && /リソース/.test(t)) { r.resource = i; return; }
+    if (/コンディション|体調/.test(t)) { r.notes.push({ col: i, label: t.slice(0, 20) }); return; }
+    r.body.push({ col: i, label: t.slice(0, 30) });
+  });
+  if (r.name == null) r.warn.push('「名前」の列が見つかりません（誰の日報か判定できないため、このシートは取り込みません）');
+  if (!r.body.length) r.warn.push('本文に使える列がありません');
+  return r;
+}
+
+// 身分証：ソース＋送信日時＋氏名（空白を除く）。行番号に依存しない
+function tkUniIdKey_(srcId, ts, name) {
+  var t = ts instanceof Date ? ts.getTime() : new Date(ts).getTime();
+  return srcId + '#' + (isNaN(t) ? String(ts) : t) + '#' + String(name || '').replace(/\s/g, '');
+}
+
 // ---------- 本文を見出し付きで1本にまとめる ----------
-function tkUniBody_(v, src) {
+function tkUniBody_(v, bodyCols) {
   var parts = [];
-  (src.BODY_COLS || []).forEach(function (c) {
+  (bodyCols || []).forEach(function (c) {
     var t = String(v[c.col] == null ? '' : v[c.col]).trim();
     // 全角スペースだけ・「なし」「特になし」等は中身なしとして落とす
     if (!t || /^[\s　。．・]*$/.test(t)) return;
@@ -133,9 +207,9 @@ function tkUniPick_(v, col) {
 }
 
 // 分類には使わないが残しておきたい情報（コンディション等）
-function tkUniNote_(v, src) {
+function tkUniNote_(v, noteCols) {
   var out = [];
-  (src.NOTE_COLS || []).forEach(function (c) {
+  (noteCols || []).forEach(function (c) {
     var t = tkUniPick_(v, c.col);
     if (t) out.push(c.label + '：' + t);
   });
@@ -177,10 +251,12 @@ function tkUniPersonName_(raw, roster) {
 }
 
 // ---------- 既に取り込んだ行 ----------
+//  rows: 旧キー 'ソース#sid#行'（元行 列から） ／ ids: 新キー 'ソース#日時#氏名'（日時・氏名・ソース列から）
+//  両方を見るので、切り替え時に既存行が二重に入ることはない
 function tkUniSeen_(out) {
-  var seen = {};
+  var seen = {}, ids = {};
   var last = out.getLastRow();
-  if (last < 2) return seen;
+  if (last < 2) return { rows: seen, ids: ids };
   var iSrc = TK_UNI_HEADER.indexOf('ソース') + 1;
   var iRow = TK_UNI_HEADER.indexOf('元行') + 1;
   var w = Math.max(iSrc, iRow);
@@ -189,8 +265,9 @@ function tkUniSeen_(out) {
     var s = String(r[iSrc - 1] || '').trim();
     var n = String(r[iRow - 1] || '').trim();
     if (s && n) seen[s + '#' + n] = 1;   // n は 'sid#row' 形式
+    if (s && r[TK.RAW_TS]) ids[tkUniIdKey_(s, r[TK.RAW_TS], r[TK.RAW_NAME])] = 1;
   });
-  return seen;
+  return { rows: seen, ids: ids };
 }
 
 // ---------- メンバー名簿（氏名リストとメール対応） ----------
@@ -251,7 +328,7 @@ function tkUniSourceSheet_(src) {
 // ============================================================
 function tk取込_ソース確認() {
   var lines = ['=== ソースの列見出し（実物） ==='];
-  (TK.SOURCES || []).forEach(function (src) {
+  (TK.SOURCES || []).concat(tkSetSources_()).forEach(function (src) {
     lines.push('');
     lines.push('▼ ' + src.NAME + '（' + src.ID + '）　部署: ' + (src.DEPT || '（未設定）'));
     if (!src.SS_ID) { lines.push('　⚠ SS_ID が未設定です'); return; }
@@ -269,13 +346,18 @@ function tk取込_ソース確認() {
         head.forEach(function (h, i) {
           lines.push('　　[' + i + '] ' + String(h || '（空）'));
         });
+        var cols = tkUniResolve_(src, head);
+        lines.push('　→ 解決: 日時[' + cols.ts + '] 名前[' + cols.name + '] メール[' + cols.email + ']' +
+          ' 目標[' + cols.weekgoal + '] リソース[' + cols.resource + ']');
+        lines.push('　→ 本文: ' + cols.body.map(function (c) { return '[' + c.col + ']' + c.label; }).join(' / '));
+        cols.warn.forEach(function (w) { lines.push('　⚠ ' + w); });
       }
     } catch (e) {
       lines.push('　⚠ 開けません: ' + (e && e.message));
     }
   });
   lines.push('');
-  lines.push('※ 上の [番号] を config の COL_* / BODY_COLS に設定してください。');
+  lines.push('※ config 定義のソースは [番号] を COL_* / BODY_COLS に。シート「取込ソース」のものは見出し名で自動です。');
   var msg = lines.join('\n');
   Logger.log(msg);
   return msg;
@@ -315,7 +397,14 @@ function tk取込_状況() {
 // ============================================================
 //  トリガー（30分ごと）
 // ============================================================
-function tk取込トリガー() { try { tk取込_全ソース(); } catch (e) { tkLog_('取込', '失敗: ' + (e && e.message)); } }
+function tk取込トリガー() {
+  var r = null;
+  try { r = tk取込_全ソース(); } catch (e) { tkLog_('取込', '失敗: ' + (e && e.message)); }
+  // 取り込んだら続けて判定（日報が書かれてから最長30分で活動記録まで届く）
+  if (r && r.added) {
+    try { tk日次キャッチアップ(); } catch (e) { tkLog_('取込', '判定を続けて実行できず: ' + (e && e.message)); }
+  }
+}
 
 function tk取込_トリガー設定() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
@@ -323,7 +412,7 @@ function tk取込_トリガー設定() {
   });
   ScriptApp.newTrigger('tk取込トリガー').timeBased().everyMinutes(30).create();
   var msg = '30分ごとに既存フォームから日報を取り込む設定にしました。\n'
-          + '分類は1時間ごとの tk日次キャッチアップ() が行います。';
+          + '取り込んだ直後に判定も続けて行います（1時間ごとの tk日次キャッチアップ() は取りこぼしの保険として残します）。';
   tkLog_('取込', msg); Logger.log(msg);
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
 }

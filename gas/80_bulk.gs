@@ -486,19 +486,18 @@ function tkBulkClassifyChunk_(chunk, questList, mem) {
 //  ※ 3回テストでは判別できない（無料枠でも20回までは通る）ので25回連打する。
 // ============================================================
 function tkAPIキー確認() {
-  var keys = String(SECRET_CONFIG.GEMINI_API_KEYS || '').split(',')
-    .map(function (s) { return s.trim(); }).filter(String);
+  var keys = tkGeminiKeys_();
   if (!keys.length) { Logger.log('APIキーが設定されていません'); return; }
 
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
-    SECRET_CONFIG.GEMINI_MODEL + ':generateContent';
+    tkGeminiModel_() + ':generateContent';
   var payload = JSON.stringify({
     contents: [{ parts: [{ text: '1+1' }] }],
     generationConfig: { maxOutputTokens: 8 }
   });
 
   var PROBE = 25;   // 無料枠(20/日)を確実に見抜くには20回超の連打が必要
-  var lines = ['=== APIキー診断（' + SECRET_CONFIG.GEMINI_MODEL + '・最大' + PROBE + '回連打） ==='];
+  var lines = ['=== APIキー診断（' + tkGeminiModel_() + '・最大' + PROBE + '回連打） ==='];
   keys.forEach(function (k, idx) {
     var label = 'キー' + (idx + 1) + '（長さ' + k.length + '・末尾 ' + k.slice(-4) + '）';
     var ok = 0, quotaId = '', quotaVal = '', err = '', msg = '', httpCode = 0;
@@ -547,7 +546,7 @@ function tkAPIキー確認() {
           var flash = ms.filter(function (n) { return /flash/i.test(n) && !/lite|thinking|image|tts|live/i.test(n); });
           lines.push('　使えるモデル数: ' + ms.length);
           lines.push('　flash系: ' + (flash.slice(0, 8).join(', ') || '（なし）'));
-          lines.push('　→ 上の名前のどれかを SECRET_CONFIG.GEMINI_MODEL に設定してください');
+          lines.push('　→ 上の名前のどれかを GEMINI_MODEL に設定してください（tk鍵を登録 または config.gs）');
         } else {
           var lb = {}; try { lb = JSON.parse(lm.getContentText()); } catch (e) {}
           lines.push('　モデル一覧も取得できません: HTTP ' + lm.getResponseCode() +

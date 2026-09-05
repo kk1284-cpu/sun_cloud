@@ -178,6 +178,7 @@ function SETUP_初期構築() {
   tkEnsureSheet_(TK.SHEET_OKR, TK_OKR_HEADER);
   tkEnsureSheet_(TK.SHEET_LOG, ['日時', '種別', '内容']);
   var qn = tkWriteQuestSheet_();
+  try { tk設定シート_作成(); } catch (e) { tkLog_('SETUP', '設定シート: ' + (e && e.message)); }   // GC設定／推進メンバー／取込ソース
 
   // フォーム作成（既に回答シートがあればスキップ）
   var formInfo = null;

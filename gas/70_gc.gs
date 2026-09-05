@@ -36,7 +36,16 @@ var TK_GC = {
 };
 
 // ---------- 週の範囲 ----------
-function tkGCWeekRange_(offsetWeeks) {
+//  opt.endDate を渡すと「その日までの7日間」（GC前日までの7日間＝部署別の曜日運用）。
+//  渡さなければ従来どおり 月〜日。
+function tkGCWeekRange_(offsetWeeks, opt) {
+  opt = opt || {};
+  if (opt.endDate) {
+    var e = new Date(opt.endDate);
+    var to = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59);
+    var from = new Date(e.getFullYear(), e.getMonth(), e.getDate() - 6);
+    return { from: from, to: to };
+  }
   var now = new Date();
   var day = now.getDay();                      // 0=日
   var mondayDiff = (day === 0 ? -6 : 1 - day);  // 月曜まで戻す
@@ -53,7 +62,7 @@ function tkGCWeekLabel_(r) {
 
 function tkGC下書き_今週() { return tkGCBuild_(0); }
 function tkGC下書き_先週() { return tkGCBuild_(-1); }
-function tkGC週次トリガー() { tkGCBuild_(0); }
+function tkGC週次トリガー() { tkGCBuild_(0); }   // 旧：金曜17時固定。⑭で日次（90_gcslide の tkGC日次トリガー）に置き換わる
 
 function tkGC下書き_トリガー設定() {
   ScriptApp.getProjectTriggers().forEach(function (t) {
@@ -67,9 +76,14 @@ function tkGC下書き_トリガー設定() {
 }
 
 // ---------- 本体 ----------
-function tkGCBuild_(offsetWeeks) {
-  var range = tkGCWeekRange_(offsetWeeks);
+//  opt.range  … 期間の上書き（日次トリガーが渡す）
+//  opt.group  … 部署またはソースIDで絞る（GC設定の1行ぶん）
+//  opt.silent … ダイアログを出さない（トリガー用）
+function tkGCBuild_(offsetWeeks, opt) {
+  opt = opt || {};
+  var range = opt.range || tkGCWeekRange_(offsetWeeks);
   var label = tkGCWeekLabel_(range);
+  var ps = opt.group ? tkSetPersonSources_() : null;
 
   // クエスト表（GC分類つき）
   var quests = tkLoadQuests_();
@@ -80,12 +94,13 @@ function tkGCBuild_(offsetWeeks) {
   var acts = tkReadActivity_().filter(function (a) {
     if (!a.ts) return false;
     var t = new Date(a.ts);
-    return t >= range.from && t <= range.to;
+    if (t < range.from || t > range.to) return false;
+    return opt.group ? tkSetGroupMatch_(opt.group, a, ps) : true;
   });
   if (!acts.length) {
-    var none = '【' + label + '】該当期間の活動記録がありません（日報が入っていないか、まだ分類されていません）。';
+    var none = '【' + label + (opt.group ? '／' + opt.group : '') + '】該当期間の活動記録がありません（日報が入っていないか、まだ分類されていません）。';
     tkLog_('GC下書き', none); Logger.log(none);
-    try { SpreadsheetApp.getUi().alert(none); } catch (e) {}
+    if (!opt.silent) { try { SpreadsheetApp.getUi().alert(none); } catch (e) {} }
     return { members: 0 };
   }
 
@@ -99,11 +114,20 @@ function tkGCBuild_(offsetWeeks) {
   });
 
   var sh = tkEnsureSheet_(TK_GC.SHEET, TK_GC.HEADER);
-  var rows = [], done = 0;
+  var rows = [], done = 0, dup = 0;
   var ids = Object.keys(per).slice(0, TK_GC.MAX_MEMBERS);
+
+  // 同じ週・同じ人の行が既にあれば作らない（作り直しで行が二重に増えないように）
+  var have = {};
+  if (sh.getLastRow() > 1) {
+    sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (r) {
+      have[String(r[0]) + '#' + tkMemberId_(r[1])] = 1;
+    });
+  }
 
   ids.forEach(function (mid) {
     var p = per[mid];
+    if (have[label + '#' + mid]) { dup++; return; }
 
     // ① 3分類は「事実の振り分け」（AIに推測させない）
     var buckets = { '直接の成果': [], '価値への取り組み': [], '人材育成': [] };
@@ -135,17 +159,17 @@ function tkGCBuild_(offsetWeeks) {
   }
 
   var msg = ['=== 週次GCシート 下書き生成 ===',
-    '対象週: ' + label,
-    '生成: ' + done + '名（活動記録 ' + acts.length + '件）',
+    '対象週: ' + label + (opt.group ? '　対象: ' + opt.group : ''),
+    '生成: ' + done + '名（活動記録 ' + acts.length + '件）' + (dup ? '　既にあり: ' + dup + '名' : ''),
     '出力先: シート「' + TK_GC.SHEET + '」',
     '',
     '※「直接の成果／価値への取り組み／人材育成」はクエスト表の【GC分類】列に沿った',
     '　事実の振り分けです（AIの推測ではありません）。',
     '※ 文章欄はAIの下書きです。ご本人が確認・微修正してGCシートに転記してください。'].join('\n');
-  tkLog_('GC下書き', 'GC下書き生成 ' + done + '名（' + label + '）');
+  tkLog_('GC下書き', 'GC下書き生成 ' + done + '名' + (dup ? '・既存 ' + dup : '') + '（' + label + (opt.group ? '／' + opt.group : '') + '）');
   Logger.log(msg);
-  try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
-  return { members: done, week: label };
+  if (!opt.silent) { try { SpreadsheetApp.getUi().alert(msg); } catch (e) {} }
+  return { members: done, week: label, dup: dup };
 }
 
 // AIで文章欄を下書き
