@@ -106,11 +106,13 @@ function tkGCBuild_(offsetWeeks, opt) {
 
   var per = {};
   acts.forEach(function (a) {
-    if (!a.mid) return;
-    if (!per[a.mid]) per[a.mid] = { name: a.name, dept: a.dept, items: [] };
-    if (a.name) per[a.mid].name = a.name;
-    if (a.dept) per[a.mid].dept = a.dept;
-    per[a.mid].items.push(a);
+    var k = tkPersonKey_(a.mid, a.name);       // メールが無い人は氏名で拾う
+    if (!k) return;
+    if (!per[k]) per[k] = { name: a.name, dept: a.dept, mid: a.mid || '', items: [] };
+    if (a.name) per[k].name = a.name;
+    if (a.dept) per[k].dept = a.dept;
+    if (a.mid && !per[k].mid) per[k].mid = a.mid;
+    per[k].items.push(a);
   });
 
   var sh = tkEnsureSheet_(TK_GC.SHEET, TK_GC.HEADER);
@@ -120,8 +122,8 @@ function tkGCBuild_(offsetWeeks, opt) {
   // 同じ週・同じ人の行が既にあれば作らない（作り直しで行が二重に増えないように）
   var have = {};
   if (sh.getLastRow() > 1) {
-    sh.getRange(2, 1, sh.getLastRow() - 1, 2).getValues().forEach(function (r) {
-      have[String(r[0]) + '#' + tkMemberId_(r[1])] = 1;
+    sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues().forEach(function (r) {
+      have[String(r[0]) + '#' + tkPersonKey_(r[1], r[2])] = 1;
     });
   }
 
@@ -141,7 +143,7 @@ function tkGCBuild_(offsetWeeks, opt) {
     // ② 文章欄はAIが下書き
     var d = tkGCDraftText_(p, range);
 
-    rows.push([label, mid, p.name, p.dept, p.items.length,
+    rows.push([label, p.mid || '', p.name, p.dept, p.items.length,
       d.theme, d.practice,
       buckets['直接の成果'].join('\n'),
       buckets['価値への取り組み'].join('\n'),
@@ -149,7 +151,7 @@ function tkGCBuild_(offsetWeeks, opt) {
       d.insight, d.philosophy, d.next, d.takeaway, new Date()]);
     done++;
 
-    if (TK_GC.MAIL && mid) {
+    if (TK_GC.MAIL && tkKeyIsMail_(mid)) {
       try { tkGCMail_(mid, p, label, buckets, d); } catch (e) {}
     }
   });

@@ -295,8 +295,10 @@ function tkGCSBuild_(offsetWeeks, opt) {
       return;
     }
 
-    if (c.SHARE_WITH_MEMBER) { try { copy.addEditor(mid); } catch (e) {} }
-    if (c.MAIL) { try { tkGCSMail_(mid, p, label, copy); } catch (e) {} }
+    // メールが分かる人だけ本人に共有できる。氏名だけの人は推進メンバー経由で渡す
+    if (c.SHARE_WITH_MEMBER && tkKeyIsMail_(mid)) { try { copy.addEditor(mid); } catch (e) {} }
+    if (c.MAIL && tkKeyIsMail_(mid)) { try { tkGCSMail_(mid, p, label, copy); } catch (e) {} }
+    if (!tkKeyIsMail_(mid)) lines.push('　（メール未登録のため本人共有なし: ' + (p.name || mid) + '）');
 
     done++;
     lines.push('　作成: ' + fname + '　' + copy.getUrl());
@@ -329,7 +331,8 @@ function tkGCSNoReport_(group, per) {
     if (!sh || sh.getLastRow() < 2) return out;
     var ps = group ? tkSetPersonSources_() : null;
     sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues().forEach(function (r) {
-      var mid = tkMemberId_(r[0]), name = String(r[1] || '').trim(), dept = String(r[2] || '').trim();
+      var name = String(r[1] || '').trim(), dept = String(r[2] || '').trim();
+      var mid = tkPersonKey_(tkMemberId_(r[0]), name);
       if (!mid || per[mid]) return;
       if (group && !tkSetGroupMatch_(group, { mid: mid, name: name, dept: dept }, ps)) return;
       out.push(name || mid);
@@ -521,14 +524,16 @@ function tkGCSCollect_(range, group) {
 
   var per = {};
   acts.forEach(function (a) {
-    if (!a.mid) return;
-    if (!per[a.mid]) {
-      per[a.mid] = { name: a.name, dept: a.dept, items: [],
+    var k = tkPersonKey_(a.mid, a.name);       // メールが無い人は氏名で拾う
+    if (!k) return;
+    if (!per[k]) {
+      per[k] = { name: a.name, dept: a.dept, mid: a.mid || '', items: [],
         buckets: { '直接の成果': [], '価値への取り組み': [], '人材育成': [] } };
     }
-    var p = per[a.mid];
+    var p = per[k];
     if (a.name) p.name = a.name;
     if (a.dept) p.dept = a.dept;
+    if (a.mid && !p.mid) p.mid = a.mid;
     p.items.push(a);
     var gc = gcByCode[a.code] || (a.axis === '成果' ? '直接の成果'
       : a.axis === '姿勢' ? '価値への取り組み' : '人材育成');
@@ -552,7 +557,7 @@ function tkGCSWorkFolder_() {
 }
 
 function tkGCSPersonFolder_(work, name, mid) {
-  var nm = (name || mid.split('@')[0]);
+  var nm = name || (tkKeyIsMail_(mid) ? String(mid).split('@')[0] : String(mid).replace(/^名前:/, ''));
   var it = work.getFoldersByName(nm);
   return it.hasNext() ? it.next() : work.createFolder(nm);
 }

@@ -39,6 +39,18 @@ function tkMemberId_(email) {
   return String(email || '').trim().toLowerCase();
 }
 
+// 集計のキー。メールが無い人は氏名で代用する。
+//  ⚠ ネットワークのフォームにはメール列が無く、名簿にメールが入っていない方が多い。
+//    メールだけをキーにしていたため、活動記録はあるのにGC下書きが作られない人がいた（2026-09-09 修正）。
+function tkPersonKey_(mid, name) {
+  var m = String(mid || '').trim().toLowerCase();
+  if (m) return m;
+  var n = String(name || '').replace(/\s/g, '').trim();
+  return n ? '名前:' + n : '';
+}
+// キーがメールなら本人に共有できる。氏名キーは共有できない
+function tkKeyIsMail_(k) { return String(k || '').indexOf('@') > 0; }
+
 // 管理者メール（config優先／無ければデプロイ実行者）
 function tkAdminEmail_() {
   if (TK.ADMIN_EMAIL) return TK.ADMIN_EMAIL;

@@ -28,3 +28,4 @@ config.gs	16oaA1I6LMd-pCGRpEHpi42mxp8JSKTTM	11863	excluded
 MCQ113_一括貼付用.gs	1XiPuL0qcbYJCTwH4Yo6JuBZjuf1WP2_1	174090	excluded
 # 2026-09-06 以降はこのリポジトリが正。下の行は Drive 原本ではなくリポジトリで追加したもの（IDなし・verify対象外）
 62_settings.gs	-	10177	done
+64_diag.gs	-	7000	done
