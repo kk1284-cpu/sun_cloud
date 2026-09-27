@@ -110,7 +110,28 @@ function tkSecret_(name) {
 function tkGeminiKeys_() {
   return tkSecret_('GEMINI_API_KEYS').split(',').map(function (s) { return s.trim(); }).filter(String);
 }
-function tkGeminiModel_() { return tkSecret_('GEMINI_MODEL') || 'gemini-flash-latest'; }
+//  モデル名は「英小文字で始まり、英数字・ハイフン・ドット」だけ。
+//  ⚠ ここに鍵や空白が入ると Google が「unexpected model name format」(HTTP 400) を返し、
+//    判定が全部止まる。2026-09-17 に実際に踏んだので、形が違う値は既定値に読み替える。
+var TK_MODEL_DEFAULT = 'gemini-flash-latest';
+function tkModelLooksValid_(v) {
+  return /^[a-z][a-z0-9.\-]{2,60}$/.test(String(v || ''));
+}
+function tkGeminiModel_() {
+  var v = tkSecret_('GEMINI_MODEL').replace(/^models\//, '').trim();   // 'models/xxx' でも通す
+  if (!v) return TK_MODEL_DEFAULT;
+  if (!tkModelLooksValid_(v)) {
+    try { tkLog_('鍵', 'モデル名の形が違うため既定値（' + TK_MODEL_DEFAULT + '）を使います'); } catch (e) {}
+    return TK_MODEL_DEFAULT;
+  }
+  return v;
+}
+
+// 値そのものを出さずに、長さと末尾だけ見せる
+function tkMaskKey_(k) {
+  k = String(k || '');
+  return k ? ('長さ' + k.length + '・末尾 ' + k.slice(-4)) : '（未設定）';
+}
 
 // エディタから実行：鍵をスクリプトプロパティに登録する（値はログに出さない）
 function tk鍵を登録() {
@@ -137,9 +158,20 @@ function tk鍵の状態() {
   var lines = ['=== 秘密の値の置き場 ==='];
   ['GEMINI_API_KEYS', 'GEMINI_MODEL', 'APP_TOKEN'].forEach(function (n) {
     var p = props.getProperty(n), c = SECRET_CONFIG[n];
+    var v = String(p || c || '');
     lines.push('　' + n + ': ' + (p ? 'スクリプトプロパティ' : (c ? 'config.gs' : '⚠ 未設定')) +
-      (n === 'GEMINI_API_KEYS' && (p || c) ? '（' + String(p || c).split(',').length + '本）' : ''));
+      (n === 'GEMINI_API_KEYS' && v ? '（' + v.split(',').length + '本・' + tkMaskKey_(v) + '）' : ''));
+    // ⚠ モデル名やトークンの欄に鍵を貼ってしまう取り違えが起きやすい
+    if (n === 'GEMINI_MODEL' && v && !tkModelLooksValid_(v.replace(/^models\//, '').trim())) {
+      lines.push('　　🔴 モデル名の形ではありません。既定値（' + TK_MODEL_DEFAULT + '）で動いています。');
+      lines.push('　　　 この欄は空にするか gemini-flash-latest と入れてください。');
+    }
+    if (n === 'APP_TOKEN' && v && (v.indexOf('AQ.') === 0 || v.length > 40)) {
+      lines.push('　　🔴 APIキーが入っている可能性があります。到達マンダラのURLの key= と一致しません。');
+    }
   });
+  lines.push('');
+  lines.push('　いま使うモデル: ' + tkGeminiModel_());
   var msg = lines.join('\n'); Logger.log(msg);
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
   return msg;
@@ -165,7 +197,15 @@ function tkGeminiJson_(prompt, schema) {
       var code = res.getResponseCode();
       if (code === 429 || code >= 500) { lastErr = 'HTTP ' + code; continue; }
       var body = JSON.parse(res.getContentText());
-      if (code !== 200) { lastErr = (body.error && body.error.message) || ('HTTP ' + code); continue; }
+      if (code !== 200) {
+        // ⚠ 400/403 は設定の誤り。上限（429）と同じ扱いにすると、ログで見分けがつかない
+        lastErr = 'HTTP ' + code + ' ' + ((body.error && body.error.message) || '');
+        if (code === 400 || code === 403) {
+          try { tkLog_('鍵', '設定の誤りで呼び出せません: ' + lastErr.slice(0, 200)); } catch (e) {}
+          return { ok: false, error: lastErr, config: true };
+        }
+        continue;
+      }
       var textOut = body.candidates && body.candidates[0] && body.candidates[0].content &&
         body.candidates[0].content.parts && body.candidates[0].content.parts[0] &&
         body.candidates[0].content.parts[0].text;

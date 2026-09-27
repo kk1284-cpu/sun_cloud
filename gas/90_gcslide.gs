@@ -34,6 +34,13 @@
 //    tkGC下書き_今すぐ作る()     … メニューから部署を選んで即時作成（待たせない）
 //    tkGCスライド_推進メンバーに共有() … 作業フォルダ全体を推進メンバーに編集権で
 //    ?view=gc&key=…            … 推進メンバー向けの下書き一覧（tkGCSListHtml_）
+//
+//  ★2026-09-09 から
+//   ・フォルダを「GC下書き ／ 事業所 ／ 氏名」の2階層にした（TK.GC_SLIDE.BY_OFFICE）。
+//     すでに直下にある人フォルダは、実行時に事業所フォルダへ移す（1回で済む・冪等）。
+//     事業所は メンバー表の「事業所」列（無ければ「部署」列）。シートを直せば分け方が変わる。
+//   ・名簿にいる全員分を作る（TK.GC_SLIDE.ALL_MEMBERS）。日報が無い方は文章欄が空のまま、
+//     「日報0件」と入ったGCシートが置かれる。GCは全員参加なので白紙でも要る。
 // ============================================================
 
 // テンプレに貼るトークン（← ③でこれを回答欄に貼る）
@@ -142,14 +149,13 @@ function tkGCスライド_個人フォルダ準備() {
     Logger.log(m); try { SpreadsheetApp.getUi().alert(m); } catch (e) {}
     return { made: 0 };
   }
-  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues();
+  var roster0 = tkGCSRoster_();
   var made = 0, shared = 0, lines = ['=== 個人フォルダの準備 ==='];
 
-  vals.forEach(function (r) {
-    var mid = String(r[0] || '').trim().toLowerCase();
-    var name = String(r[1] || '').trim() || (mid ? mid.split('@')[0] : '');
+  roster0.list.forEach(function (m) {
+    var mid = m.mid, name = m.name || (mid ? mid.split('@')[0] : '');
     if (!mid) return;
-    var folder = tkGCSPersonFolder_(work, name, mid);
+    var folder = tkGCSPersonFolder_(work, name, mid, m.office);
     made++;
     if (TK.GC_SLIDE.SHARE_WITH_MEMBER) {
       try { folder.addEditor(mid); shared++; }
@@ -179,9 +185,9 @@ function tkGCスライド_トリガー設定() {
     if (t.getHandlerFunction() === 'tkGCスライド週次トリガー') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('tkGCスライド週次トリガー').timeBased()
-    .onWeekDay(ScriptApp.WeekDay.FRIDAY).atHour(17).nearMinute(30).inTimezone(TK.TZ).create();
-  var msg = '毎週金曜17時30分に、個人フォルダへ下書き入りGCシートを作る設定にしました。\n'
-          + '（シート「GC下書き」の生成は17時。その30分後に走ります）';
+    .onWeekDay(ScriptApp.WeekDay.FRIDAY).atHour(tkGCSRunHour_()).nearMinute(tkGCSRunMinute_()).inTimezone(TK.TZ).create();
+  var msg = '毎週金曜 ' + tkGCSRunHour_() + '時に、個人フォルダへ下書き入りGCシートを作る設定にしました。\n'
+          + '★事業所ごとに曜日を変えるなら ⑭ を使ってください（こちらは金曜固定の古い方式です）。';
   tkLog_('GCスライド', msg); Logger.log(msg);
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
 }
@@ -193,6 +199,16 @@ function tkGCスライド_トリガー設定() {
 //  中身の問題ではなく一時的なものなので、少し待ってやり直せば通る。
 //  待ち時間は 2秒 → 5秒 → 12秒 と延ばす。
 var TK_GCS_WAIT = [2000, 5000, 12000];
+
+// 下書きを作る時刻（GCの前日）。config で変えられる
+function tkGCSRunHour_() {
+  var h = TK.GC_SLIDE && TK.GC_SLIDE.RUN_HOUR;
+  return (h === 0 || h) ? h : 11;
+}
+function tkGCSRunMinute_() {
+  var m = TK.GC_SLIDE && TK.GC_SLIDE.RUN_MINUTE;
+  return (m === 0 || m) ? m : 0;
+}
 
 function tkGCSRetry_(fn) {
   var last = null;
@@ -210,35 +226,58 @@ function tkGCSRetry_(fn) {
 function tkGCSBuild_(offsetWeeks, opt) {
   opt = opt || {};
   var c = TK.GC_SLIDE;
-  if (!c || !c.TEMPLATE_ID) {
-    throw new Error('TK.GC_SLIDE.TEMPLATE_ID が未設定です。先に tkGCスライド_下書きテンプレを用意() を実行し、'
-      + 'トークンを貼ってIDを設定してください。');
+  var tplId = tkGCSTemplateId_();          // 新フレーム（スクリプトプロパティ）が優先
+  if (!tplId) {
+    throw new Error('下書き用テンプレが未設定です。tkGCスライド_新フレームを作る() を実行してください。');
   }
-  if (c.TEMPLATE_ID === c.MASTER_ID) {
-    throw new Error('TEMPLATE_ID が顧客原本と同じです。原本を書き換える事故になるため中止しました。');
+  if (tplId === c.MASTER_ID) {
+    throw new Error('テンプレが顧客原本と同じです。原本を書き換える事故になるため中止しました。');
   }
 
   var range = opt.range || tkGCWeekRange_(offsetWeeks);   // 70_gc.gs と同じ週の切り方
   var label = tkGCWeekLabel_(range);
   var per = tkGCSCollect_(range, opt.group);               // メンバー別の材料
-  var ids = Object.keys(per);
+  var roster = tkGCSRoster_();
   var work = tkGCSWorkFolder_();
   var lines = ['=== 下書き入りGCシートの作成（' + label + (opt.group ? '／' + opt.group : '') + '） ==='];
-  tkGCSShareManagers_(work, lines);                        // 推進メンバーへの共有（毎回確認・差分だけ）
+  var madeForChat = [];                                    // Chatへのお知らせ用（94_chat.gs）
+  if (!opt.noShare) tkGCSShareManagers_(work, lines);      // 個別再生成では既存の共有設定を変えない
+
+  // 作る相手＝「材料がある人」＋「名簿にいる全員」（ALL_MEMBERS のとき）。
+  //   GCは全員参加なので、日報が無い方にも白紙のシートが要る。
+  var ids = Object.keys(per);
+  if (c.ALL_MEMBERS) {
+    var ps = opt.group ? tkSetPersonSources_() : null;
+    roster.list.forEach(function (m) {
+      if (per[m.key] || m.stop) return;
+      if (opt.group && !tkSetGroupMatch_(opt.group, { mid: m.mid, name: m.name, dept: m.dept, office: m.office }, ps)) return;
+      per[m.key] = { name: m.name, dept: m.dept, mid: m.mid, items: [], blank: true,
+        buckets: { '直接の成果': [], '価値への取り組み': [], '人材育成': [] } };
+      ids.push(m.key);
+    });
+  }
+  if (opt.onlyKeys) ids = ids.filter(function (k) { return !!opt.onlyKeys[k]; });
   if (!ids.length) {
-    var none = '【' + label + (opt.group ? '／' + opt.group : '') + '】該当期間の活動記録がありません（日報が入っていないか、まだ判定されていません）。';
+    var none = '【' + label + (opt.group ? '／' + opt.group : '') + '】対象になる方がいません（名簿が空か、絞り込みに誰も当たりません）。';
     lines.push(none);
     tkLog_('GCスライド', none); Logger.log(lines.join('\n'));
     if (!opt.silent) { try { SpreadsheetApp.getUi().alert(lines.join('\n')); } catch (e) {} }
     return { members: 0 };
   }
 
-  var done = 0, skipped = 0, failed = 0;
+  var done = 0, skipped = 0, failed = 0, blanks = 0, left = 0;
+  // 複数の事業所をまとめて回すときは、6分の上限を全体で分け合う
+  var deadline = opt.deadline || (Date.now() + TK_GCS_RUN_MS);
 
   ids.slice(0, TK_GC.MAX_MEMBERS).forEach(function (mid) {
+    // 1人あたり数秒かかる。6分の上限に当たる前に切り上げ、続きは5分後の自動実行に回す
+    if (Date.now() > deadline) { left++; return; }
     var p = per[mid];
-    var folder = tkGCSPersonFolder_(work, p.name, mid);
-    var fname = 'GCシート ' + label.replace(/\//g, '-') + '　' + (p.name || mid);
+    var rm = roster.byKey[mid];
+    var office = (rm && rm.office) || p.dept;
+    var folder = tkGCSPersonFolder_(work, p.name, mid, office);
+    var fname = 'GCシート ' + label.replace(/\//g, '-') + '　' + (p.name || mid) +
+      (opt.versionLabel ? '（' + opt.versionLabel + '）' : '');
 
     // 同じ週のものが既にあれば作らない（本人が手を入れたものを潰さない）
     if (folder.getFilesByName(fname).hasNext()) {
@@ -252,7 +291,7 @@ function tkGCSBuild_(offsetWeeks, opt) {
     var copy, pres;
     try {
       copy = tkGCSRetry_(function () {
-        return DriveApp.getFileById(c.TEMPLATE_ID).makeCopy(fname, folder);
+        return DriveApp.getFileById(tplId).makeCopy(fname, folder);
       });
       pres = SlidesApp.openById(copy.getId());
     } catch (e) {
@@ -261,11 +300,13 @@ function tkGCSBuild_(offsetWeeks, opt) {
       return;
     }
 
-    var d = tkGCDraftText_(p, range);            // 70_gc.gs のAI下書きをそのまま使う
+    // 日報が無い方はAIを呼ばない（材料が無いので推測になる）。文章欄は空のまま渡す
+    var d = p.blank ? { theme: '', practice: '', insight: '', philosophy: '', next: '', takeaway: '' }
+                    : tkGCDraftText_(p, range);   // 70_gc.gs のAI下書きをそのまま使う
     // 箱に収まる分だけ。3件を超えたら件数で示す
     var b = function (k) {
       var v = p.buckets[k] || [];
-      if (!v.length) return '（今週は該当なし）';
+      if (!v.length) return p.blank ? '' : '（今週は該当なし）';
       var head = v.slice(0, 3).map(function (x) { return '・' + x; }).join('\n');
       return v.length > 3 ? head + '\n・ほか' + (v.length - 3) + '件' : head;
     };
@@ -274,7 +315,7 @@ function tkGCSBuild_(offsetWeeks, opt) {
       '{{NAME}}':          p.name || mid,
       '{{DEPT}}':          p.dept || '',
       '{{WEEK}}':          label,
-      '{{COUNT}}':         String(p.items.length) + '件',
+      '{{COUNT}}':         String(p.items.length) + '件',   // 0件なら「日報0件」と入る
       '{{THEME}}':         d.theme || '',
       '{{PRACTICE}}':      d.practice || '',
       '{{RESULT_DIRECT}}': b('直接の成果'),
@@ -296,49 +337,83 @@ function tkGCSBuild_(offsetWeeks, opt) {
     }
 
     // メールが分かる人だけ本人に共有できる。氏名だけの人は推進メンバー経由で渡す
-    if (c.SHARE_WITH_MEMBER && tkKeyIsMail_(mid)) { try { copy.addEditor(mid); } catch (e) {} }
-    if (c.MAIL && tkKeyIsMail_(mid)) { try { tkGCSMail_(mid, p, label, copy); } catch (e) {} }
+    if (!opt.noShare && c.SHARE_WITH_MEMBER && tkKeyIsMail_(mid)) { try { copy.addEditor(mid); } catch (e) {} }
+    if (!opt.noMail && c.MAIL && tkKeyIsMail_(mid)) { try { tkGCSMail_(mid, p, label, copy); } catch (e) {} }
     if (!tkKeyIsMail_(mid)) lines.push('　（メール未登録のため本人共有なし: ' + (p.name || mid) + '）');
 
     done++;
-    lines.push('　作成: ' + fname + '　' + copy.getUrl());
+    if (p.blank) blanks++;
+    madeForChat.push({ office: office, name: p.name || mid, id: copy.getId(),
+      url: copy.getUrl(), blank: !!p.blank });
+    lines.push('　作成: ' + fname + (p.blank ? '（日報なし・白紙）' : '') + '　' + copy.getUrl());
   });
 
-  // 作らなかった理由も残す：この部署の名簿にいて、期間内の活動記録が無い人
-  var noRep = tkGCSNoReport_(opt.group, per);
-  if (noRep.length) lines.push('　日報なし（作成せず）' + noRep.length + '名: ' + noRep.join('、'));
+  // 名簿に無い方（フォームの氏名が名簿と違う等）は、ここで気づけるようにする
+  var offRoster = ids.filter(function (k) { return !roster.byKey[k]; })
+    .map(function (k) { return per[k].name || k; });
+  if (offRoster.length) lines.push('　⚠ 名簿に無い氏名 ' + offRoster.length + '名: ' + offRoster.join('、'));
+
+  if (left && !opt.onlyKeys) {
+    tkGCSScheduleResume_(range, opt.group);
+    lines.push('　⏳ 時間の都合でここまで。残り ' + left + '名は5分後に自動で続きます。');
+  }
 
   lines.push('');
-  lines.push('作成 ' + done + '名／既存 ' + skipped + '名' +
-    (failed ? '／🔴失敗 ' + failed + '名' : '') + (noRep.length ? '／日報なし ' + noRep.length + '名' : ''));
+  lines.push('作成 ' + done + '名（うち日報なしの白紙 ' + blanks + '名）／既存 ' + skipped + '名' +
+    (failed ? '／🔴失敗 ' + failed + '名' : '') + (left ? '／残り ' + left + '名（自動で続行）' : ''));
   if (failed) lines.push('※ 失敗した方は、もう一度この関数を実行すれば作られます（できている分はスキップされます）。');
   lines.push('※ 3分類は事実の振り分け、文章欄はAIの下書きです。ご本人が確認・微修正してお使いください。');
   lines.push('※ 外的/内的な変化・ドラッカーのコンセプト・フィロソフィ目標は空欄のままです（ご本人の記入欄）。');
+  // ⚠ 途中で切れた回は投げない。残りが片付いた回にまとめて1本だけ出す。
+  if (!opt.noChat && !left && madeForChat.length) {
+    try { tkChatNotifyGC_(label, madeForChat, work.getUrl()); } catch (e) {
+      lines.push('　（Chatへのお知らせは送れませんでした: ' + (e && e.message) + '）');
+    }
+  }
+
   var msg = lines.join('\n');
-  tkLog_('GCスライド', '作成 ' + done + '名・既存 ' + skipped + '名' +
-    (failed ? '・失敗 ' + failed + '名' : '') + (noRep.length ? '・日報なし ' + noRep.length + '名' : '') +
+  tkLog_('GCスライド', '作成 ' + done + '名（白紙' + blanks + '）・既存 ' + skipped + '名' +
+    (failed ? '・失敗 ' + failed + '名' : '') +
     '（' + label + (opt.group ? '／' + opt.group : '') + '）');
   Logger.log(msg);
   if (!opt.silent) { try { SpreadsheetApp.getUi().alert(msg.slice(0, 1800)); } catch (e) {} }
-  return { members: done, skipped: skipped, failed: failed, noReport: noRep.length, week: label };
+  return { members: done, skipped: skipped, failed: failed, blanks: blanks, left: left,
+    week: label, files: madeForChat };
 }
 
-// 名簿にいて、材料（活動記録）が無かった人。group が部署ならその部署だけ、ソースIDなら日報統合の所属で判定
-function tkGCSNoReport_(group, per) {
-  var out = [];
+// ============================================================
+//  途中で止まったら、5分後に自分で続きを作る
+// ============================================================
+//  ⚠ 36名分になったので1回の実行では収まらないことがある。
+//    できている分はスキップされるので、同じ引数でもう一度走らせれば足りる。
+//    一括分類（80_bulk）と同じ「レジューム式」の考え方。
+var TK_GCS_RUN_MS = 260000;                  // ここまで来たら切り上げる（上限6分に対する余裕）
+var TK_GCS_PROP = 'TK_GCS_RESUME';
+
+function tkGCSScheduleResume_(range, group) {
   try {
-    var sh = tkSS_().getSheetByName(TK.SHEET_MEMBER);
-    if (!sh || sh.getLastRow() < 2) return out;
-    var ps = group ? tkSetPersonSources_() : null;
-    sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues().forEach(function (r) {
-      var name = String(r[1] || '').trim(), dept = String(r[2] || '').trim();
-      var mid = tkPersonKey_(tkMemberId_(r[0]), name);
-      if (!mid || per[mid]) return;
-      if (group && !tkSetGroupMatch_(group, { mid: mid, name: name, dept: dept }, ps)) return;
-      out.push(name || mid);
+    PropertiesService.getScriptProperties().setProperty(TK_GCS_PROP, JSON.stringify({
+      from: range.from.getTime(), to: range.to.getTime(), group: group || ''
+    }));
+    ScriptApp.getProjectTriggers().forEach(function (t) {
+      if (t.getHandlerFunction() === 'tkGCスライド_続きを作る') ScriptApp.deleteTrigger(t);
     });
-  } catch (e) {}
-  return out;
+    ScriptApp.newTrigger('tkGCスライド_続きを作る').timeBased().after(5 * 60 * 1000).create();
+  } catch (e) { tkLog_('GCスライド', '続行の予約に失敗: ' + (e && e.message)); }
+}
+
+function tkGCスライド_続きを作る() {
+  var props = PropertiesService.getScriptProperties();
+  var raw = props.getProperty(TK_GCS_PROP);
+  ScriptApp.getProjectTriggers().forEach(function (t) {
+    if (t.getHandlerFunction() === 'tkGCスライド_続きを作る') ScriptApp.deleteTrigger(t);
+  });
+  if (!raw) { tkLog_('GCスライド', '続きの予約がありません'); return { members: 0 }; }
+  var s = JSON.parse(raw);
+  var r = tkGCSBuild_(0, { range: { from: new Date(s.from), to: new Date(s.to) },
+                           group: s.group || '', silent: true });
+  if (!r || !r.left) props.deleteProperty(TK_GCS_PROP);   // 全部できたら予約を消す
+  return r;
 }
 
 // ============================================================
@@ -408,30 +483,66 @@ function tkGC_トリガー設定() {
     var fn = t.getHandlerFunction();
     if (['tkGC週次トリガー', 'tkGCスライド週次トリガー', 'tkGC日次トリガー'].indexOf(fn) >= 0) ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('tkGC日次トリガー').timeBased().everyDays(1).atHour(17).nearMinute(30).inTimezone(TK.TZ).create();
+  var H = tkGCSRunHour_(), M = tkGCSRunMinute_();
+  ScriptApp.newTrigger('tkGC日次トリガー').timeBased().everyDays(1).atHour(H).nearMinute(M).inTimezone(TK.TZ).create();
+  var hhmm = H + ':' + (M < 10 ? '0' + M : M);
   var gs = tkSetGcGroups_();
-  var lines = ['毎日17:30に、シート「' + TK.SHEET_GCSET + '」を見て「明日がGC」の部署の下書きを作る設定にしました。',
-    '（金曜固定の2本のトリガーは外しました）', '', 'いまの設定:'];
-  gs.forEach(function (g) { lines.push('　' + g.group + '：' + TK_SET.WEEKDAYS[g.day] + '曜' + (g.enabled ? '' : '（無効）')); });
+  var lines = ['毎日 ' + hhmm + ' に、シート「' + TK.SHEET_GCSET + '」を見て「明日がGC」の事業所の下書きを作る設定にしました。',
+    '（金曜17:00／17:30 の2本は外しました）', '', 'いまの設定:'];
+  gs.forEach(function (g) {
+    var prev = TK_SET.WEEKDAYS[(g.day + 6) % 7];
+    lines.push('　' + g.group + '：GCは' + TK_SET.WEEKDAYS[g.day] + '曜 → ' + prev + '曜 ' + hhmm + ' に作成' +
+      (g.enabled ? '' : '（無効）'));
+  });
   lines.push('', '曜日を変えるときはシートを直すだけです。');
+  lines.push('時刻を変えるときは config.gs の GC_SLIDE.RUN_HOUR です（松山が直します）。');
   var msg = lines.join('\n');
   tkLog_('GC', msg); Logger.log(msg);
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
 }
 
-// メニュー ⑫：部署（またはソースID）を選んで、今日までの7日間で今すぐ作る
+// メニュー ⑫：今日までの7日間で今すぐ作る
+//  対象は空＝全員。事業所やソースIDを「/」「、」区切りで複数書いてもよい。
 function tkGC下書き_今すぐ作る() {
   var ui = SpreadsheetApp.getUi();
-  var gs = tkSetGcGroups_();
   var r = ui.prompt('GC下書きを今すぐ作る',
-    '対象を入力してください（空＝全員）。\n\n候補: ' + gs.map(function (g) { return g.group; }).join(' / ') +
-    '\n（ソースID yakkyoku / network / hananoaru も使えます）\n\n期間は今日までの7日間です。すでにある下書きは作り直しません。',
+    '★何も入れずに OK を押すと、名簿の全員分を作ります。\n' +
+    '　（すでにある下書きは作り直しません）\n\n' +
+    '一部だけ作りたいときは、事業所名を入れてください。\n' +
+    '　例）薬局　　例）ネットワーク　　例）薬局 / ネットワーク\n\n' +
+    '期間は今日までの7日間です。',
     ui.ButtonSet.OK_CANCEL);
   if (r.getSelectedButton() !== ui.Button.OK) return;
-  var group = String(r.getResponseText() || '').trim();
+
+  var groups = String(r.getResponseText() || '').split(/[\/,、\s]+/)
+    .map(function (s) { return s.trim(); }).filter(String);
+  if (!groups.length) groups = [''];          // 空＝全員
+
   var range = tkGCWeekRange_(0, { endDate: new Date() });
-  tkGCBuild_(0, { range: range, group: group, silent: true });
-  return tkGCSBuild_(0, { range: range, group: group });
+  var deadline = Date.now() + TK_GCS_RUN_MS;
+  var out = [], total = 0, left = 0;
+  groups.forEach(function (g) {
+    try { tkGCBuild_(0, { range: range, group: g, silent: true }); } catch (e) {}
+    var r2 = tkGCSBuild_(0, { range: range, group: g, silent: true, deadline: deadline });
+    out.push((g || '全員') + '：作成 ' + (r2.members || 0) + '名' +
+      (r2.blanks ? '（白紙 ' + r2.blanks + '）' : '') +
+      (r2.skipped ? '／既存 ' + r2.skipped : '') +
+      (r2.left ? '／残り ' + r2.left + '（自動で続行）' : ''));
+    total += (r2.members || 0);
+    left += (r2.left || 0);
+  });
+
+  var msg = ['=== GC下書きを今すぐ作りました ===',
+    '期間: ' + tkGCWeekLabel_(range), ''].concat(out);
+  if (!total && !left) {
+    msg.push('');
+    msg.push('⚠ 1件も作られませんでした。入れた対象名が事業所と一致していない可能性があります。');
+    msg.push('　もう一度 ⑫ を押して、**何も入れずに OK**（＝全員）でお試しください。');
+  }
+  var text = msg.join('\n');
+  Logger.log(text);
+  try { ui.alert(text.slice(0, 1800)); } catch (e) {}
+  return { members: total, left: left };
 }
 
 // ============================================================
@@ -457,23 +568,30 @@ function tkGCSListHtml_(key, opt) {
   } catch (e) {}
 
   var rows = [];
-  var folders = work.getFolders();
-  while (folders.hasNext()) {
-    var f = folders.next();
-    var person = f.getName(), dept = deptBy[person] || '';
-    if (group && dept !== group) continue;
-    var files = f.getFiles();
+  // 「事業所 → 人」と、旧レイアウトの「人」直置きの両方を歩く
+  var scan = function (folder, office) {
+    var files = folder.getFiles();
     while (files.hasNext()) {
       var file = files.next();
       var nm = file.getName();
       if (nm.indexOf('GCシート ') !== 0) continue;
       var cr = file.getDateCreated();
       if (cr < since) continue;
+      var person = folder.getName();
+      var dept = office || deptBy[person] || '';
+      if (group && dept !== group) continue;
       var up = file.getLastUpdated();
       var m = nm.match(/^GCシート (\S+)/);
       rows.push({ person: person, dept: dept, week: m ? m[1] : '', created: cr, updated: up,
                   edited: (up.getTime() - cr.getTime()) > 120000, url: file.getUrl() });
     }
+  };
+  var top = work.getFolders();
+  while (top.hasNext()) {
+    var f = top.next();
+    scan(f, deptBy[f.getName()] || '');          // 旧レイアウト（人フォルダが直下）
+    var sub = f.getFolders();                     // 新レイアウト（事業所フォルダの中）
+    while (sub.hasNext()) scan(sub.next(), f.getName());
   }
   rows.sort(function (a, b) {
     if (a.week !== b.week) return a.week < b.week ? 1 : -1;
@@ -514,12 +632,16 @@ function tkGCSCollect_(range, group) {
   var gcByCode = {};
   quests.forEach(function (q) { gcByCode[q.code] = q.gc; });
   var ps = group ? tkSetPersonSources_() : null;
+  var rs = group ? tkGCSRoster_() : null;          // 事業所で絞るために名簿を引く
 
   var acts = tkReadActivity_().filter(function (a) {
     if (!a.ts) return false;
     var t = new Date(a.ts);
     if (t < range.from || t > range.to) return false;
-    return group ? tkSetGroupMatch_(group, a, ps) : true;
+    if (!group) return true;
+    var rm = rs && rs.byKey[tkPersonKey_(a.mid, a.name)];
+    return tkSetGroupMatch_(group, { mid: a.mid, name: a.name, dept: a.dept,
+      office: rm && rm.office }, ps);
   });
 
   var per = {};
@@ -547,6 +669,43 @@ function tkGCSCollect_(range, group) {
   return per;
 }
 
+// ---------- 名簿（事業所つき） ----------
+//  事業所の決め方（上が優先）:
+//    ① メンバー表の「事業所」列（人が決めたものが最優先）
+//    ② その人が実際に日報を書いているフォーム ＝ トライアルのチーム
+//       （薬局／ネットワーク／花のある家（中吉田））
+//    ③ どのフォームにも書いていない → 「その他」
+//  ★②にしている理由：部署（薬局・ネットワークなど）ではチームが分かれない。
+//    GCはチーム単位で行うので、実際に書いている場所で分けるのが実態に合う。
+//  ★列の増減に強くするため、見出し名で探す（列番号を決め打ちしない）
+var TK_GCS_PSRC = null;      // 日報統合の読み直しを1実行で1回にする
+function tkGCSRoster_() {
+  var out = { list: [], byKey: {} };
+  var sh = tkSS_().getSheetByName(TK.SHEET_MEMBER);
+  if (!sh || sh.getLastRow() < 2) return out;
+  var other = (TK.GC_SLIDE && TK.GC_SLIDE.OFFICE_OTHER) || 'その他';
+  if (!TK_GCS_PSRC) TK_GCS_PSRC = tkSetPersonSources_();
+  var bySrc = tkSetOfficeBySource_();
+
+  var w = Math.max(3, sh.getLastColumn());
+  var head = sh.getRange(1, 1, 1, w).getValues()[0].map(function (v) { return String(v || '').trim(); });
+  var iOffice = head.indexOf('事業所');
+  var vals = sh.getRange(2, 1, sh.getLastRow() - 1, w).getValues();
+  vals.forEach(function (r) {
+    var mid = tkMemberId_(r[0]), name = String(r[1] || '').trim(), dept = String(r[2] || '').trim();
+    var key = tkPersonKey_(mid, name);
+    if (!key) return;
+    var src = (mid && TK_GCS_PSRC.byMid[mid]) || (name && TK_GCS_PSRC.byName[name]) || '';
+    var office = (iOffice >= 0 ? String(r[iOffice] || '').trim() : '')
+              || (src && bySrc[src]) || other;
+    var m = { key: key, mid: mid, name: name, dept: dept, office: office, source: src,
+              stop: String(r[6] || '').trim() === '停止' };
+    out.list.push(m);
+    out.byKey[key] = m;
+  });
+  return out;
+}
+
 // ---------- フォルダ ----------
 function tkGCSWorkFolder_() {
   var c = TK.GC_SLIDE;
@@ -556,10 +715,79 @@ function tkGCSWorkFolder_() {
   return it.hasNext() ? it.next() : root.createFolder(nm);
 }
 
-function tkGCSPersonFolder_(work, name, mid) {
-  var nm = name || (tkKeyIsMail_(mid) ? String(mid).split('@')[0] : String(mid).replace(/^名前:/, ''));
+//  事業所フォルダ（BY_OFFICE が false なら作業フォルダそのまま）
+function tkGCSOfficeFolder_(work, office) {
+  if (!(TK.GC_SLIDE && TK.GC_SLIDE.BY_OFFICE)) return work;
+  var nm = String(office || '').trim() || '部署未設定';
   var it = work.getFoldersByName(nm);
   return it.hasNext() ? it.next() : work.createFolder(nm);
+}
+
+//  人フォルダ。事業所フォルダの中に置く。
+//  ⚠ 以前は作業フォルダの直下に作っていた。直下に見つかったら**移す**（中身・共有はそのまま）。
+function tkGCSPersonFolder_(work, name, mid, office) {
+  var nm = name || (tkKeyIsMail_(mid) ? String(mid).split('@')[0] : String(mid).replace(/^名前:/, ''));
+  var parent = tkGCSOfficeFolder_(work, office);
+
+  var here = parent.getFoldersByName(nm);
+  if (here.hasNext()) return here.next();
+
+  // 旧レイアウト（作業フォルダ直下）にあれば移設する
+  if (parent.getId() !== work.getId()) {
+    var old = work.getFoldersByName(nm);
+    if (old.hasNext()) {
+      var f = old.next();
+      try { f.moveTo(parent); tkLog_('GCスライド', 'フォルダ移設 ' + nm + ' → ' + parent.getName()); return f; }
+      catch (e) { tkLog_('GCスライド', 'フォルダ移設できず ' + nm + '（' + (e && e.message) + '）'); return f; }
+    }
+  }
+  return parent.createFolder(nm);
+}
+
+// ============================================================
+//  フォルダを「事業所 → 人」に並べ替える（作り直しはしない・何度でも実行可）
+// ============================================================
+function tkGCスライド_事業所フォルダに並べ替え() {
+  var work = tkGCSWorkFolder_();
+  var roster = tkGCSRoster_();
+  var lines = ['=== 事業所ごとのフォルダに並べ替え ===', 'フォルダ: ' + work.getUrl(), ''];
+  var moved = 0, made = 0, kept = 0;
+
+  var byOffice = {};
+  roster.list.forEach(function (m) { (byOffice[m.office] = byOffice[m.office] || []).push(m); });
+
+  Object.keys(byOffice).sort().forEach(function (office) {
+    var parent = tkGCSOfficeFolder_(work, office);
+    lines.push('▼ ' + office + '（' + byOffice[office].length + '名）');
+    byOffice[office].forEach(function (m) {
+      var nm = m.name || m.mid;
+      if (parent.getFoldersByName(nm).hasNext()) { kept++; return; }
+      var old = work.getFoldersByName(nm);
+      if (old.hasNext()) {
+        var f = old.next();
+        try { f.moveTo(parent); moved++; lines.push('　移した: ' + nm); }
+        catch (e) { lines.push('　⚠ 移せず: ' + nm + '（' + (e && e.message) + '）'); }
+      } else {
+        var nf = parent.createFolder(nm);
+        if (TK.GC_SLIDE.SHARE_WITH_MEMBER && tkKeyIsMail_(m.mid)) {
+          try { nf.addEditor(m.mid); } catch (e) {}
+        }
+        made++; lines.push('　作った: ' + nm);
+      }
+    });
+  });
+
+  tkGCSShareManagers_(work, lines);
+  lines.push('');
+  lines.push('移した ' + moved + '名／新しく作った ' + made + '名／もう入っていた ' + kept + '名');
+  lines.push('※ グループは「実際に日報を書いているフォーム」＝トライアルのチームです。');
+  lines.push('　 どのフォームにも書いていない方は「' + ((TK.GC_SLIDE && TK.GC_SLIDE.OFFICE_OTHER) || 'その他') + '」に入ります。');
+  lines.push('　 メンバー表に「事業所」列を作って書けば、その値が最優先になります。');
+  var msg = lines.join('\n');
+  tkLog_('GCスライド', '事業所フォルダ 移設' + moved + '・新規' + made);
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert(msg.slice(0, 1800)); } catch (e) {}
+  return msg;
 }
 
 // ---------- 本人への案内メール（TK.GC_SLIDE.MAIL = true のとき） ----------
@@ -695,15 +923,15 @@ function tkGCSPick_(labelBox, blanks, want, stack) {
 
 function tkGCSAutoToken_(apply) {
   var c = TK.GC_SLIDE;
-  if (!c || !c.TEMPLATE_ID) {
-    throw new Error('TK.GC_SLIDE.TEMPLATE_ID が未設定です。' +
+  if (!c || !tkGCSTemplateId_()) {
+    throw new Error('下書き用テンプレが未設定です。' +
       'まず tkGCスライド_下書きテンプレを用意() を実行し、そのIDを config に入れてください。');
   }
-  if (c.TEMPLATE_ID === c.MASTER_ID) {
-    throw new Error('TEMPLATE_ID が MASTER_ID と同じです。顧客原本には書き込めません。');
+  if (tkGCSTemplateId_() === c.MASTER_ID) {
+    throw new Error('テンプレが MASTER_ID と同じです。顧客原本には書き込めません。');
   }
 
-  var pres = SlidesApp.openById(c.TEMPLATE_ID);
+  var pres = SlidesApp.openById(tkGCSTemplateId_());
   var sl = tkGCSWeeklySlide_(pres);
   if (!sl) throw new Error('週次スライド（「今週の振り返り」を含むもの）が見つかりません');
 
@@ -867,10 +1095,10 @@ function tkGCSFit_(sh) {
 
 function tkGCスライド_文字を整える() {
   var c = TK.GC_SLIDE;
-  if (!c || !c.TEMPLATE_ID) throw new Error('TK.GC_SLIDE.TEMPLATE_ID が未設定です');
-  if (c.TEMPLATE_ID === c.MASTER_ID) throw new Error('TEMPLATE_ID が MASTER_ID と同じです');
+  if (!c || !tkGCSTemplateId_()) throw new Error('下書き用テンプレが未設定です');
+  if (tkGCSTemplateId_() === c.MASTER_ID) throw new Error('テンプレが MASTER_ID と同じです');
 
-  var pres = SlidesApp.openById(c.TEMPLATE_ID);
+  var pres = SlidesApp.openById(tkGCSTemplateId_());
   var n = 0, lines = ['=== 目印の箱の文字を整える ==='];
 
   pres.getSlides().forEach(function (sl) {
@@ -905,17 +1133,36 @@ function tkGCスライド_文字を整える() {
 function tkGCスライド_先週分を消す() { return tkGCSDelete_(-1); }
 function tkGCスライド_今週分を消す() { return tkGCSDelete_(0); }
 
-function tkGCSDelete_(offsetWeeks) {
-  var range = tkGCWeekRange_(offsetWeeks);
+// ★「今すぐ作る」で作った分を消す。
+//   ⚠ 上の「今週分」は月〜日なので、今すぐ作った（今日まで7日間の）分とは
+//     期間の名前が違い、1件も消えない。2026-09-17 に踏んだので専用を用意した。
+function tkGCスライド_今日作った分を消す() {
+  var ui = null; try { ui = SpreadsheetApp.getUi(); } catch (e) {}
+  var group = '';
+  if (ui) {
+    var msg0 = '★何も入れずに OK を押すと、今日の期間の下書きを全員分ゴミ箱に入れます。\n'
+             + '（ゴミ箱なので元に戻せます）\n\n'
+             + '一部だけ消すときは、事業所名を入れてください。\n'
+             + '　例）ネットワーク　　例）薬局\n\n'
+             + '期間は今日までの7日間です。';
+    var r = ui.prompt('今日作った下書きを消す', msg0, ui.ButtonSet.OK_CANCEL);
+    if (r.getSelectedButton() !== ui.Button.OK) return { deleted: 0 };
+    group = String(r.getResponseText() || '').trim();
+  }
+  return tkGCSDelete_(0, { range: tkGCWeekRange_(0, { endDate: new Date() }), group: group });
+}
+
+function tkGCSDelete_(offsetWeeks, opt) {
+  opt = opt || {};
+  var range = opt.range || tkGCWeekRange_(offsetWeeks);
   var label = tkGCWeekLabel_(range);
   var work = tkGCSWorkFolder_();
   var pat = 'GCシート ' + label.replace(/\//g, '-');
-  var n = 0, lines = ['=== 下書きを消す（' + label + '） ==='];
+  var group = String(opt.group || '').trim();
+  var n = 0, lines = ['=== 下書きを消す（' + label + (group ? '／' + group : '') + '） ==='];
 
-  var folders = work.getFolders();
-  while (folders.hasNext()) {
-    var f = folders.next();
-    var files = f.getFiles();
+  var kill = function (folder) {
+    var files = folder.getFiles();
     while (files.hasNext()) {
       var file = files.next();
       if (file.getName().indexOf(pat) === 0) {
@@ -924,6 +1171,15 @@ function tkGCSDelete_(offsetWeeks) {
         n++;
       }
     }
+  };
+  var folders = work.getFolders();
+  while (folders.hasNext()) {
+    var f = folders.next();
+    var isOffice = f.getFolders().hasNext();      // 中にフォルダがあれば事業所フォルダ
+    if (group && isOffice && f.getName().indexOf(group) < 0) continue;
+    if (!group || !isOffice) kill(f);             // 旧レイアウト（直下に個人フォルダ）
+    var sub = f.getFolders();                     // 事業所フォルダの中
+    while (sub.hasNext()) kill(sub.next());
   }
   lines.push('');
   lines.push('消した下書き: ' + n + '件（ゴミ箱に入りました。元に戻せます）');

@@ -69,8 +69,9 @@ function tkGC下書き_トリガー設定() {
     if (t.getHandlerFunction() === 'tkGC週次トリガー') ScriptApp.deleteTrigger(t);
   });
   ScriptApp.newTrigger('tkGC週次トリガー').timeBased()
-    .onWeekDay(ScriptApp.WeekDay.FRIDAY).atHour(17).inTimezone(TK.TZ).create();
-  var msg = '毎週金曜17時に「GC下書き」を自動生成する設定にしました。';
+    .onWeekDay(ScriptApp.WeekDay.FRIDAY).atHour(tkGCSRunHour_()).inTimezone(TK.TZ).create();
+  var msg = '毎週金曜 ' + tkGCSRunHour_() + '時に「GC下書き」を自動生成する設定にしました。\n'
+          + '★事業所ごとに曜日を変えるなら ⑭ を使ってください（こちらは金曜固定の古い方式です）。';
   tkLog_('GC下書き', msg); Logger.log(msg);
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) {}
 }
@@ -84,6 +85,7 @@ function tkGCBuild_(offsetWeeks, opt) {
   var range = opt.range || tkGCWeekRange_(offsetWeeks);
   var label = tkGCWeekLabel_(range);
   var ps = opt.group ? tkSetPersonSources_() : null;
+  var rs = opt.group ? tkGCSRoster_() : null;      // 事業所で絞るために名簿を引く
 
   // クエスト表（GC分類つき）
   var quests = tkLoadQuests_();
@@ -95,7 +97,10 @@ function tkGCBuild_(offsetWeeks, opt) {
     if (!a.ts) return false;
     var t = new Date(a.ts);
     if (t < range.from || t > range.to) return false;
-    return opt.group ? tkSetGroupMatch_(opt.group, a, ps) : true;
+    if (!opt.group) return true;
+    var rm = rs && rs.byKey[tkPersonKey_(a.mid, a.name)];
+    return tkSetGroupMatch_(opt.group, { mid: a.mid, name: a.name, dept: a.dept,
+      office: rm && rm.office }, ps);
   });
   if (!acts.length) {
     var none = '【' + label + (opt.group ? '／' + opt.group : '') + '】該当期間の活動記録がありません（日報が入っていないか、まだ分類されていません）。';
@@ -117,7 +122,9 @@ function tkGCBuild_(offsetWeeks, opt) {
 
   var sh = tkEnsureSheet_(TK_GC.SHEET, TK_GC.HEADER);
   var rows = [], done = 0, dup = 0;
-  var ids = Object.keys(per).slice(0, TK_GC.MAX_MEMBERS);
+  var ids = Object.keys(per);
+  if (opt.onlyKeys) ids = ids.filter(function (k) { return !!opt.onlyKeys[k]; });
+  ids = ids.slice(0, TK_GC.MAX_MEMBERS);
 
   // 同じ週・同じ人の行が既にあれば作らない（作り直しで行が二重に増えないように）
   var have = {};

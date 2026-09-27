@@ -49,6 +49,8 @@ function doGet(e) {
     else if (p.action === 'praiseDraft')   out = tkPraiseDraft();
     else if (p.action === 'praiseSend')    out = tkPraiseSend();
     else if (p.action === 'monthlyReport') out = tkGenerateMonthlyReport(+p.y || 0, +p.m || 0);
+    // 読むだけの診断（下書きが出ない理由を人ごとに数える）。シート「診断」にも書く
+    else if (p.action === 'diag')          out = { ok: true, text: tkGCDiag_(Math.min(+p.days || 7, 90)) };
     else out = { ok: false, error: 'unknown action' };
   } catch (err) {
     out = { ok: false, error: String(err && err.message || err) };
@@ -103,11 +105,21 @@ function onOpen() {
       .addItem('⑪ APIキーの診断', 'tkAPIキー確認')
       .addSeparator()
       .addItem('⑫ GC下書きを今すぐ作る（部署を選ぶ）', 'tkGC下書き_今すぐ作る')
+      .addItem('⑫- 個人GCを再生成（氏名・週を指定／旧版は残す）', 'tkGC_個人を再生成')
+      .addItem('⑫- 今日作った下書きを消す（作り直す前に）', 'tkGCスライド_今日作った分を消す')
       .addItem('⑬ 設定シートを作る（GC設定・推進メンバー・取込ソース／1回）', 'tk設定シート_作成')
       .addItem('⑬- 推進メンバーに下書きフォルダを共有', 'tkGCスライド_推進メンバーに共有')
+      .addSeparator()
+      .addItem('⑲ Chat通知の設定シートを作る（1回）', 'tkChat設定シート_作成')
+      .addItem('⑲- Chatへテスト送信', 'tkChat_テスト送信')
       .addItem('⑭ GCの自動作成を毎日17:30に設定（金曜固定をやめる／1回）', 'tkGC_トリガー設定')
       .addItem('⑮ AIの鍵をスクリプトプロパティに登録', 'tk鍵を登録')
       .addItem('⑯ 下書きが出ない理由を人ごとに出す', 'tkGC_なぜ出ないか')
+      .addItem('⑰ フォルダを事業所ごとに並べ替える', 'tkGCスライド_事業所フォルダに並べ替え')
+      .addSeparator()
+      .addItem('⑱ 新しいGCシートのフレームを作る', 'tkGCスライド_新フレームを作る')
+      .addItem('⑱- いま使っているテンプレを見る', 'tkGCスライド_いまのテンプレ')
+      .addItem('⑱= フレームを元に戻す', 'tkGCスライド_フレームを元に戻す')
       .addToUi();
   } catch (e) {}
 }

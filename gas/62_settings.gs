@@ -22,8 +22,23 @@ var TK_SET = {
   HEADER_SRC: ['ID', '名称', '部署', 'スプレッドシートID', 'シートgid（空＝フォーム連携シート全部）',
                '名前の列見出し（空＝名前/氏名）', 'メールの列見出し（空＝自動）', '有効', '開始日（YYYY-MM-DD）', 'メモ'],
   WEEKDAYS: ['日', '月', '火', '水', '木', '金', '土'],
-  DEFAULT_GC_DAY: '土'    // 9/5（土）にGCが行われた実績に合わせた既定。前日の金曜17:30に作る＝従来と同じ動き
+  DEFAULT_GC_DAY: '土'    // 高村社長のグループが土曜。前日（金曜）の11時に作る
 };
+
+// GC設定シートの既定の行＝GC下書きフォルダの事業所と同じ並び。
+//   ここを部署（薬局・ネットワークなど）にすると薬局とネットワークが分かれないため、
+//   フォルダと同じ「事業所」で持つ。
+function tkSetDefaultGroups_() {
+  var out = [];
+  (TK.SOURCES || []).forEach(function (s) {
+    if (s.ENABLED === false) return;
+    var o = String(s.OFFICE || s.DEPT || '').trim();
+    if (o && out.indexOf(o) < 0) out.push(o);
+  });
+  var other = (TK.GC_SLIDE && TK.GC_SLIDE.OFFICE_OTHER) || 'その他';
+  if (out.indexOf(other) < 0) out.push(other);
+  return out;
+}
 
 // ---------- 曜日 ----------
 function tkSetWeekdayIndex_(s) {
@@ -55,7 +70,7 @@ function tkSetGcGroups_() {
     }
   } catch (e) {}
   if (!out.length) {
-    (TK.DEPTS || []).forEach(function (d) {
+    tkSetDefaultGroups_().forEach(function (d) {
       out.push({ group: d, day: tkSetWeekdayIndex_(TK_SET.DEFAULT_GC_DAY), enabled: true });
     });
   }
@@ -117,6 +132,16 @@ function tkSetAllSources_() {
   return order.map(function (id) { return byId[id]; }).filter(function (s) { return s && s.ENABLED !== false; });
 }
 
+// ---------- ソースID → 事業所フォルダ名（OFFICE。無ければ部署、それも無ければ名称） ----------
+function tkSetOfficeBySource_() {
+  var map = {};
+  (TK.SOURCES || []).concat(tkSetSources_()).forEach(function (s) {
+    if (!s || !s.ID) return;
+    map[s.ID] = String(s.OFFICE || s.DEPT || s.NAME || s.ID).trim();
+  });
+  return map;
+}
+
 // ---------- 人 → どのソースに書いているか（GC設定でソースIDを使えるようにする） ----------
 //  日報統合の（氏名/メール → ソース）。最後に書いたソースを採用。
 function tkSetPersonSources_() {
@@ -136,17 +161,22 @@ function tkSetPersonSources_() {
   return out;
 }
 
-// グループ（部署 or ソースID or ソース名）に、この活動記録の人が入るか
+// グループ（事業所 or 部署 or ソースID or ソース名）に、この人が入るか
+//  ★事業所（OFFICE）で絞れることが要点。フォルダの分け方と同じ言葉で指定できる。
+//    どのフォームにも書いていない人は「その他」に入る。
 function tkSetGroupMatch_(group, a, ps) {
   if (!group) return true;
+  if (String(a.office || '').trim() === group) return true;
   if (String(a.dept || '').trim() === group) return true;
   ps = ps || { byMid: {}, byName: {} };
   var src = (a.mid && ps.byMid[a.mid]) || (a.name && ps.byName[a.name]) || '';
-  if (!src) return false;
+  var other = (TK.GC_SLIDE && TK.GC_SLIDE.OFFICE_OTHER) || 'その他';
+  if (!src) return group === other;          // どこにも書いていない人＝その他
   if (src === group) return true;
   var def = null;
   (TK.SOURCES || []).concat(tkSetSources_()).forEach(function (s) { if (s.ID === src) def = s; });
-  return !!(def && def.NAME === group);
+  if (!def) return false;
+  return def.NAME === group || String(def.OFFICE || '').trim() === group;
 }
 
 // ============================================================
@@ -160,11 +190,13 @@ function tk設定シート_作成() {
   var gc = ss.getSheetByName(TK.SHEET_GCSET);
   if (!gc) {
     gc = tkEnsureSheet_(TK.SHEET_GCSET, TK_SET.HEADER_GC);
-    var rows = (TK.DEPTS || []).map(function (d) { return [d, TK_SET.DEFAULT_GC_DAY, 'する', '']; });
-    rows.push(['（例）yakkyoku', '金', 'しない', 'ソースID（yakkyoku / network / hananoaru）を書くと、そのフォームに書いている人だけを別の曜日にできる']);
+    var defs = tkSetDefaultGroups_();
+    var rows = defs.map(function (d) { return [d, TK_SET.DEFAULT_GC_DAY, 'する', 'GC下書きフォルダの事業所と同じ名前です']; });
+    rows.push(['（例）薬局・ネットワーク', '金', 'しない', '部署名やソースID（yakkyoku / network / hananoaru）でも指定できます']);
     gc.getRange(2, 1, rows.length, TK_SET.HEADER_GC.length).setValues(rows);
     gc.setColumnWidth(1, 220); gc.setColumnWidth(4, 520);
-    lines.push('　「' + TK.SHEET_GCSET + '」を作成（部署' + (TK.DEPTS || []).length + '件・既定 ' + TK_SET.DEFAULT_GC_DAY + '曜＝前日の金曜17:30に作成）');
+    lines.push('　「' + TK.SHEET_GCSET + '」を作成（事業所' + defs.length + '件・既定 ' + TK_SET.DEFAULT_GC_DAY +
+      '曜＝前日の' + tkGCSRunHour_() + '時に作成）');
   } else lines.push('　「' + TK.SHEET_GCSET + '」は既にあります（触っていません）');
 
   // 推進メンバー

@@ -16,6 +16,9 @@
 //  ⑤は 70_gc / 90_gcslide を直したので、いまは氏名で拾う（共有だけができない）。
 // ============================================================
 
+var TK_DIAG_HEADER = ['出ない理由', '氏名', '部署', 'メール',
+  '日報', '判定', '該当なし', '活動記録', '下書き', '備考'];
+
 function tkGC_なぜ出ないか() {
   var days = 7;
   try {
@@ -168,9 +171,36 @@ function tkGCDiag_(days) {
   lines.push('※ ⑤は名簿にメールを入れると解消します。いまは氏名で拾って下書きは作りますが、本人への共有ができません。');
   lines.push('※ ⑥は ⑫ GC下書きを今すぐ作る で出ます。');
 
+  // ---- シート「診断」に書き出す（アラートは長いと切れるので、読む場所はシートにする） ----
+  var sheetName = '診断';
+  var dg = tkEnsureSheet_(sheetName, TK_DIAG_HEADER);
+  dg.clear();
+  var out = [TK_DIAG_HEADER];
+  out.push(['― 対象期間 ' + label + '（' + days + '日間）　' +
+    Utilities.formatDate(new Date(), TK.TZ, 'M/d HH:mm') + ' 時点', '', '', '', '', '', '', '', '', '']);
+  out.push(['― 日報 ' + rawTotal + '件／判定 ' + clsTotal + '件（該当なし ' + noneTotal + '）／活動記録 ' + actTotal +
+    '件（メール無し ' + actNoMid + '）／下書き ' + draftTotal + '件', '', '', '', '', '', '', '', '', '']);
+  Object.keys(tally).sort().forEach(function (k) {
+    out.push(['― ' + k + '：' + tally[k] + '名', '', '', '', '', '', '', '', '', '']);
+  });
+  out.push(['', '', '', '', '', '', '', '', '', '']);
+  order.forEach(function (k) {
+    var p = people[k];
+    out.push([p.reason, p.name || '', p.dept || '', p.mid || '（無し）',
+      p.raw, p.cls, p.none, p.act, p.draft, p.roster ? '' : '名簿に無し']);
+  });
+  dg.getRange(1, 1, out.length, TK_DIAG_HEADER.length).setValues(out);
+  dg.setFrozenRows(1);
+  dg.getRange(1, 1, 1, TK_DIAG_HEADER.length).setFontWeight('bold').setBackground('#1B5E20').setFontColor('#FFFFFF');
+  dg.setColumnWidth(1, 190); dg.setColumnWidth(2, 130); dg.setColumnWidth(3, 150); dg.setColumnWidth(4, 240);
+  try { dg.activate(); } catch (e) {}
+
   var msg = lines.join('\n');
   tkLog_('診断', '下書き診断（' + label + '）' + Object.keys(tally).map(function (k) { return k + tally[k]; }).join(' '));
   Logger.log(msg);
-  try { SpreadsheetApp.getUi().alert(msg.slice(0, 1800) + (msg.length > 1800 ? '\n\n…続きは実行ログ（表示→ログ）で見てください。' : '')); } catch (e) {}
+  var head = ['=== 調べました（' + label + '） ===', ''];
+  Object.keys(tally).sort().forEach(function (k) { head.push('　' + k + '：' + tally[k] + '名'); });
+  head.push('', '人ごとの内訳は シート「' + sheetName + '」に出しました。', 'そのシートを開いて、そのまま貼って送ってください。');
+  try { SpreadsheetApp.getUi().alert(head.join('\n')); } catch (e) {}
   return msg;
 }

@@ -497,7 +497,7 @@ function tkAPIキー確認() {
   });
 
   var PROBE = 25;   // 無料枠(20/日)を確実に見抜くには20回超の連打が必要
-  var lines = ['=== APIキー診断（' + tkGeminiModel_() + '・最大' + PROBE + '回連打） ==='];
+  var lines = ['=== APIキー診断（モデル ' + tkGeminiModel_() + '・最大' + PROBE + '回連打） ==='];
   keys.forEach(function (k, idx) {
     var label = 'キー' + (idx + 1) + '（長さ' + k.length + '・末尾 ' + k.slice(-4) + '）';
     var ok = 0, quotaId = '', quotaVal = '', err = '', msg = '', httpCode = 0;
